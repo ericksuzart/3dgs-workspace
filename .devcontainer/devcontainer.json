@@ -1,0 +1,43 @@
+{
+    "name": "3dgs workspace",
+    "remoteUser": "${localEnv:USERNAME}",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "args": {
+            "USERNAME": "${localEnv:USER}"
+        }
+    },
+    "runArgs": [
+        "--network=host",
+        "--ipc=host",
+        "--pid=host",
+        "--gpus",
+        "all"
+    ],
+    "overrideCommand": false,
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "charliemarsh.ruff",
+                "ms-azuretools.vscode-docker"
+            ]
+        }
+    },
+    "updateRemoteUserUID": false,
+    "containerEnv": {
+        "DISPLAY": "${localEnv:DISPLAY}",
+        "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
+        "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
+        "PULSE_SERVER": "${localEnv:PULSE_SERVER}",
+        "LIBGL_ALWAYS_SOFTWARE": "0"
+    },
+    "mounts": [
+        "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
+        "source=/dev/dri,target=/dev/dri,type=bind,consistency=cached"
+    ],
+    "workspaceMount": "source=${localWorkspaceFolder},target=/${localWorkspaceFolderBasename},type=bind",
+    "workspaceFolder": "/${localWorkspaceFolderBasename}",
+    "initializeCommand": "if [ -n \"$DISPLAY\" ]; then xhost +local:docker; fi",
+    "postCreateCommand": "sudo chown -R $(whoami) ${containerWorkspaceFolder}"
+}
