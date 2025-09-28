@@ -30,11 +30,13 @@
         "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
         "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
         "PULSE_SERVER": "${localEnv:PULSE_SERVER}",
-        "LIBGL_ALWAYS_SOFTWARE": "0"
+        "LIBGL_ALWAYS_SOFTWARE": "0",
+        "DATASET_PATH": "/datasets" // must match the mount path
     },
     "mounts": [
         "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
-        "source=/dev/dri,target=/dev/dri,type=bind,consistency=cached"
+        "source=/dev/dri,target=/dev/dri,type=bind,consistency=cached",
+        "source=${localEnv:DATASET_PATH},target=/datasets,type=bind" // Adjust this path as needed
     ],
     "workspaceMount": "source=${localWorkspaceFolder},target=/${localWorkspaceFolderBasename},type=bind",
     "workspaceFolder": "/${localWorkspaceFolderBasename}",
