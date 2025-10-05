@@ -40,6 +40,5 @@
     ],
     "workspaceMount": "source=${localWorkspaceFolder},target=/${localWorkspaceFolderBasename},type=bind",
     "workspaceFolder": "/${localWorkspaceFolderBasename}",
-    "initializeCommand": "if [ -n \"$DISPLAY\" ]; then xhost +local:docker; fi",
     "postCreateCommand": "sudo chown -R $(whoami) ${containerWorkspaceFolder}"
 }
