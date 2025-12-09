@@ -2,7 +2,7 @@
     "name": "3dgs workspace",
     "remoteUser": "${localEnv:USERNAME}",
     "build": {
-        "dockerfile": "Dockerfile",
+        "dockerfile": "${localWorkspaceFolder}/docker/3dgsworkspace/Dockerfile",
         "args": {
             "USERNAME": "${localEnv:USER}"
         }
@@ -28,15 +28,20 @@
     "containerEnv": {
         "DISPLAY": "${localEnv:DISPLAY}",
         "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
+        "XAUTHORITY": "/home/${localEnv:USERNAME}/.Xauthority",
         "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
         "PULSE_SERVER": "${localEnv:PULSE_SERVER}",
         "LIBGL_ALWAYS_SOFTWARE": "0",
-        "DATASET_PATH": "/datasets" // must match the mount path
+        "NVIDIA_VISIBLE_DEVICES": "all",
+        "NVIDIA_DRIVER_CAPABILITIES": "graphics,compute,utility",
+        "DATASET_PATH": "/dataset" // Path inside the container where the dataset will be mounted
     },
     "mounts": [
+        "source=${localEnv:HOME}/.Xauthority,target=/home/${localEnv:USERNAME}/.Xauthority,type=bind,consistency=cached",
+        "source=${localEnv:XDG_RUNTIME_DIR},target=${localEnv:XDG_RUNTIME_DIR},type=bind,consistency=cached",
         "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
         "source=/dev/dri,target=/dev/dri,type=bind,consistency=cached",
-        "source=${localEnv:DATASET_PATH},target=/datasets,type=bind" // Adjust this path as needed
+        "source=${localEnv:DATASET_PATH},target=/dataset,type=bind"
     ],
     "workspaceMount": "source=${localWorkspaceFolder},target=/${localWorkspaceFolderBasename},type=bind",
     "workspaceFolder": "/${localWorkspaceFolderBasename}",

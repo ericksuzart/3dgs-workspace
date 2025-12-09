@@ -13,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y \
     wget curl nano git libx11-6 libgl1-mesa-glx g++ \
     libglfw3-dev libavdevice-dev libavcodec-dev libeigen3-dev \
-    libxxf86vm-dev colmap imagemagick ffmpeg meshlab && \
+    libxxf86vm-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone Gaussian Splatting to a persistent location
