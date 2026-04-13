@@ -1,0 +1,15 @@
+# Pre-processing / Inpainting - Python dependencies
+# Pinned versions for reproducible builds
+# Used by: docker/pre-processing/Dockerfile
+
+numpy==1.26.4
+opencv-python==4.9.0.80
+Pillow==9.5.0
+segment-anything==1.0
+simple-lama-inpainting==0.1.2
+tqdm==4.66.4
+iopaint==1.3.3
+py360convert==1.0.1
+diffusers==0.27.2
+accelerate==0.29.3
+transformers==4.39.3

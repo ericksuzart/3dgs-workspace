@@ -26,6 +26,8 @@
     },
     "updateRemoteUserUID": false,
     "containerEnv": {
+        // X11 display for GUI apps (inpainting). Requires host DISPLAY to be set.
+        // On Wayland-only setups, you may need to set LIBGL_ALWAYS_SOFTWARE=1.
         "DISPLAY": "${localEnv:DISPLAY}",
         "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
         "XAUTHORITY": "/home/${localEnv:USERNAME}/.Xauthority",
@@ -36,6 +38,9 @@
         "NVIDIA_DRIVER_CAPABILITIES": "graphics,compute,utility",
         "DATASET_PATH": "/dataset" // Path inside the container where the dataset will be mounted
     },
+    // NOTE: These mounts require X11/Wayland host support.
+    // On Wayland-only or headless setups, you may need to remove some mounts.
+    // See README.md for troubleshooting display issues.
     "mounts": [
         "source=${localEnv:HOME}/.Xauthority,target=/home/${localEnv:USERNAME}/.Xauthority,type=bind,consistency=cached",
         "source=${localEnv:XDG_RUNTIME_DIR},target=${localEnv:XDG_RUNTIME_DIR},type=bind,consistency=cached",

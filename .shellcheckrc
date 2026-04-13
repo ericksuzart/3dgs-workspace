@@ -1,0 +1,11 @@
+# ShellCheck configuration
+# https://github.com/koalaman/shellcheck
+
+# Shell dialect
+shell=bash
+
+# Excluded rules:
+# SC1091: Not following external file (e.g., source /etc/profile)
+# SC2034: Variable appears unused (common in Docker env setup)
+# SC2154: Variable referenced but not assigned (we validate these ourselves)
+exclude=SC1091,SC2034,SC2154

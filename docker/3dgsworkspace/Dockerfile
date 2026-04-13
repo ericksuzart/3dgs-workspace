@@ -19,9 +19,10 @@ RUN apt-get update && apt-get install -y \
 # Clone Gaussian Splatting to a persistent location
 RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git ${GS_PATH}
 
-# Install Python dependencies
-RUN pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
-RUN pip install tqdm plyfile
+# Install Python dependencies from pinned requirements
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN rm /tmp/requirements.txt
 
 # Build the submodules
 RUN cd ${GS_PATH} && \

@@ -1,10 +1,21 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Stop the script if any command fails
-set -e
+# Build and push Docker images to DockerHub.
+#
+# USAGE:
+#   ./build_and_push.sh <dockerhub-user> <image-name> <image-tag>
+#
+# EXAMPLES:
+#   ./build_and_push.sh myusername 3dgsworkspace latest
+#   ./build_and_push.sh myusername 3dgs-colmap v1.0.0
+#
+# ENVIRONMENT:
+#   DOCKERHUB_TOKEN  DockerHub access token (required for CI).
+#                    If unset, interactive login is used.
 
-# === Argument Parsing ===
-if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+# Argument Parsing
+if [[ $# -lt 3 ]]; then
     echo "ERROR: Missing arguments."
     echo "Usage: $0 <dockerhub-user> <image-name> <image-tag>"
     echo "Example: $0 myusername 3dgsworkspace latest"
@@ -15,40 +26,46 @@ DOCKERHUB_USER="$1"
 IMAGE_NAME="$2"
 IMAGE_TAG="$3"
 
-# Define the Dockerfile path based on the image name
-cd ${IMAGE_NAME}
-DOCKERFILE_PATH="Dockerfile"
+# Validate that the image directory exists
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IMAGE_DIR="${SCRIPT_DIR}/${IMAGE_NAME}"
 
-# Check if the specified Dockerfile exists
-if [ ! -f "$DOCKERFILE_PATH" ]; then
-    echo "ERROR: Dockerfile not found."
-    echo "Based on the image name '$IMAGE_NAME', this script expected to find a file named: $DOCKERFILE_PATH"
+if [[ ! -d "$IMAGE_DIR" ]]; then
+    echo "ERROR: Image directory '${IMAGE_DIR}' does not exist."
+    echo "Available images: $(ls -1 "${SCRIPT_DIR}" | grep -v '\.sh$' | grep -v 'pre-processing' | tr '\n' ' ')"
     exit 1
 fi
+
+cd "$IMAGE_DIR"
 
 # Define the local and remote image tags
 LOCAL_IMAGE_TAG="${IMAGE_NAME}-build:${IMAGE_TAG}"
 REMOTE_IMAGE_TAG="${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
 
-# 1. Build the Docker image
-echo "Building Docker image from: $DOCKERFILE_PATH"
-# We tag it with a local name first
-docker build -t $LOCAL_IMAGE_TAG -f $DOCKERFILE_PATH .
+# Build the Docker image
+echo "Building Docker image from: ${IMAGE_DIR}/Dockerfile"
+docker build -m "${CONTAINER_MEMORY:-12g}" --platform linux/amd64 -t "$LOCAL_IMAGE_TAG" -f Dockerfile .
 echo "Build complete."
 
-# 2. Tag the image for Docker Hub
+# Tag the image for Docker Hub
 echo "Tagging image for Docker Hub as: $REMOTE_IMAGE_TAG"
-docker tag $LOCAL_IMAGE_TAG $REMOTE_IMAGE_TAG
+docker tag "$LOCAL_IMAGE_TAG" "$REMOTE_IMAGE_TAG"
 
-# 3. Login to Docker Hub
+# Login to Docker Hub
 echo ""
-echo "Please log in to Docker Hub..."
-docker login -u $DOCKERHUB_USER
+if [[ -n "${DOCKERHUB_TOKEN:-}" ]]; then
+    echo "Logging in to Docker Hub (via token)..."
+    echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+else
+    echo "DOCKERHUB_TOKEN not set — falling back to interactive login."
+    echo "For CI/CD, set DOCKERHUB_TOKEN to a DockerHub access token."
+    docker login -u "$DOCKERHUB_USER"
+fi
 
-# 4. Push the image
+# Push the image
 echo ""
 echo "Pushing image to Docker Hub..."
-docker push $REMOTE_IMAGE_TAG
+docker push "$REMOTE_IMAGE_TAG"
 
 echo ""
 echo "Successfully pushed! Image is available at: $REMOTE_IMAGE_TAG"

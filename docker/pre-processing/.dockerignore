@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Models (SAM weights - 2.5GB, downloaded at runtime)
+models/
+*.pth
+
+# Input samples (not needed in production image)
+input/
+
+# Notebooks (development only)
+*.ipynb
+
+# Output
+output/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

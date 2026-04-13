@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inpaint360"
+version = "0.1.0"
+description = "Interactive 360° tripod/object removal: paint-brush masking + nadir-reprojected SD2/LaMa inpainting"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy==1.26.4",
+    "opencv-python==4.9.0.80",
+    "Pillow==9.5.0",
+    "tqdm==4.66.4",
+    "segment-anything==1.0",
+    "simple-lama-inpainting==0.1.2",
+    "iopaint==1.3.3",
+    "py360convert==1.0.1",
+    "diffusers==0.27.2",
+    "accelerate==0.29.3",
+    "transformers==4.39.3",
+]
+
+[project.scripts]
+inpaint360 = "inpaint360.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

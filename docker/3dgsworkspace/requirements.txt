@@ -1,0 +1,10 @@
+# 3DGS Workspace - Core Python dependencies
+# Pinned versions for reproducible builds
+# Used by: .devcontainer/Dockerfile, docker/3dgsworkspace/Dockerfile
+
+torch==1.13.1+cu117
+torchvision==0.14.1+cu117
+--extra-index-url https://download.pytorch.org/whl/cu117
+
+tqdm==4.66.4
+plyfile==1.0.3

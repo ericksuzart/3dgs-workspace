@@ -1,4 +1,5 @@
 #!/bin/bash
+set -uo pipefail
 
 #
 # This software is free for non-commercial, research and evaluation use under the terms of the
@@ -7,8 +8,6 @@
 # This shell script is a conversion of the Python script provided in the original 3dgs repository to
 # facilitate easier integration with COLMAP workflows for 3dgs.
 #
-
-# --- Helper Functions ---
 
 # Function to display script usage
 show_usage() {
@@ -38,7 +37,7 @@ check_exit_code() {
     fi
 }
 
-# --- Argument Parsing ---
+# Argument Parsing
 
 # Set default values
 NO_GPU=0
@@ -104,8 +103,6 @@ if [ -z "$SOURCE_PATH" ]; then
     exit 1
 fi
 
-# --- Setup Variables ---
-
 # Set command variables, quoting the path if provided (for use with eval)
 COLMAP_CMD="colmap"
 [ -n "$COLMAP_EXECUTABLE" ] && COLMAP_CMD="\"$COLMAP_EXECUTABLE\""
@@ -114,28 +111,28 @@ COLMAP_CMD="colmap"
 USE_GPU=1
 [ "$NO_GPU" -eq 1 ] && USE_GPU=0
 
-# --- Main Script Logic ---
+# Main Script Logic
 
 if [ "$SKIP_MATCHING" -eq 0 ]; then
     echo "Running feature extraction and matching..."
     mkdir -p "$SOURCE_PATH/distorted/sparse"
     check_exit_code "mkdir distorted/sparse" $?
 
-    ## Feature extraction
+    # Feature extraction
     # We use 'eval' to correctly handle the quoted command path if it was provided
     eval $COLMAP_CMD feature_extractor \
         --database_path "\"$SOURCE_PATH/distorted/database.db\"" \
         --image_path "\"$SOURCE_PATH/input\"" \
-        --ImageReader.single_camera 0 \
+        --ImageReader.single_camera 1 \
         --ImageReader.camera_model "$CAMERA"
     check_exit_code "Feature extraction" $?
 
-    ## Feature matching
+    #Feature matching
     eval $COLMAP_CMD exhaustive_matcher \
         --database_path "\"$SOURCE_PATH/distorted/database.db\""
     check_exit_code "Feature matching" $?
 
-    ### Bundle adjustment
+    # Bundle adjustment
     eval $COLMAP_CMD mapper \
         --database_path "\"$SOURCE_PATH/distorted/database.db\"" \
         --image_path "\"$SOURCE_PATH/input\"" \
@@ -146,7 +143,7 @@ else
     echo "Skipping feature extraction and matching."
 fi
 
-### Image undistortion
+# Image undistortion
 echo "Running image undistortion..."
 eval $COLMAP_CMD image_undistorter \
     --image_path "\"$SOURCE_PATH/input\"" \
@@ -155,7 +152,7 @@ eval $COLMAP_CMD image_undistorter \
     --output_type COLMAP
 check_exit_code "Image undistorter" $?
 
-### Organize sparse directory
+# Organize sparse directory
 echo "Organizing sparse directory..."
 mkdir -p "$SOURCE_PATH/sparse/0"
 check_exit_code "mkdir sparse/0" $?
@@ -170,7 +167,7 @@ for f in "$SOURCE_PATH/sparse"/*; do
     fi
 done
 
-### Image Resizing
+# Image Resizing
 if [ "$RESIZE" -eq 1 ]; then
     echo "Copying and resizing images..."
 
@@ -180,7 +177,7 @@ if [ "$RESIZE" -eq 1 ]; then
     mkdir -p "$SOURCE_PATH/images_8"
     check_exit_code "Creating resize directories" $?
 
-    # --- START: Parallel Setup ---
+    # START: Parallel Setup
     # Get number of available CPU cores, default to 4 if nproc not found
     MAX_JOBS=$(nproc 2>/dev/null || echo 4)
     echo "Using up to $MAX_JOBS parallel jobs."
@@ -190,17 +187,17 @@ if [ "$RESIZE" -eq 1 ]; then
         local source_file="$1"
         local file=$(basename "$source_file")
 
-        # --- 50% resize (images_2) ---
+        # 50% resize (images_2)
         dest_file_2="$SOURCE_PATH/images_2/$file"
         cp "$source_file" "$dest_file_2" || { echo "Failed copy to images_2: $file"; return 1; }
         eval $MAGICK_CMD mogrify -resize 50% "\"$dest_file_2\"" || { echo "Failed 50% resize: $file"; return 1; }
 
-        # --- 25% resize (images_4) ---
+        # 25% resize (images_4)
         dest_file_4="$SOURCE_PATH/images_4/$file"
         cp "$source_file" "$dest_file_4" || { echo "Failed copy to images_4: $file"; return 1; }
         eval $MAGICK_CMD mogrify -resize 25% "\"$dest_file_4\"" || { echo "Failed 25% resize: $file"; return 1; }
 
-        # --- 12.5% resize (images_8) ---
+        # 12.5% resize (images_8)
         dest_file_8="$SOURCE_PATH/images_8/$file"
         cp "$source_file" "$dest_file_8" || { echo "Failed copy to images_8: $file"; return 1; }
         eval $MAGICK_CMD mogrify -resize 12.5% "\"$dest_file_8\"" || { echo "Failed 12.5% resize: $file"; return 1; }
@@ -210,9 +207,9 @@ if [ "$RESIZE" -eq 1 ]; then
     export -f process_image
     export SOURCE_PATH
     export MAGICK_CMD
-    # --- END: Parallel Setup ---
+    # END: Parallel Setup
 
-    # --- START: Progress Bar & Loop ---
+    # START: Progress Bar & Loop
     # Collect all files into an array, handling spaces etc.
     file_list=()
     while IFS= read -r -d '' file; do
@@ -261,7 +258,7 @@ if [ "$RESIZE" -eq 1 ]; then
         update_progress
     done
     
-    # --- END: Progress Bar & Loop ---
+    # END: Progress Bar & Loop
     
     # Print a final newline to move off the progress bar line
     printf "\n"
