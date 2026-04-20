@@ -406,12 +406,7 @@ run_panorama() {
         mv "$panorama_output/images" "$panorama_output/input"
     fi
 
-    # Remove the cameras (pano_camera0-3) that has obstruction
-    for i in 0 1 2 3; do
-        rm -rf "$panorama_output/pano_camera$i" 2>/dev/null || true
-    done
-
-    # Flatten images in input/
+    # Flatten images first
     flatten_images() {
         local dir="$1"
         if [[ ! -d "$dir" ]]; then return; fi
@@ -430,6 +425,13 @@ run_panorama() {
     }
     flatten_images "$panorama_output/input" 2>/dev/null || true
     flatten_images "$panorama_output/masks" 2>/dev/null || true
+
+    # Remove images from excluded camera indices (0-3 typically have obstruction)
+    # These were flattened with prefix pano_camera0_, pano_camera1_, etc.
+    for i in 0 1 2 3; do
+        rm -f "$panorama_output/input/pano_camera${i}_"*.jpg 2>/dev/null || true
+        rm -f "$panorama_output/input/pano_camera${i}_"*.png 2>/dev/null || true
+    done
 
     # Summary
     echo ""
@@ -583,11 +585,6 @@ run_pipeline() {
         mv "$DATASET_PATH/images" "$colmap_input"
     fi
 
-    # Remove empty camera folders (pano_camera0-3) that didn't contribute to reconstruction
-    for i in 0 1 2 3; do
-        rm -rf "$DATASET_PATH/pano_camera$i" 2>/dev/null || true
-    done
-
     # Flatten panorama output (images from subdirs to root)
     flatten_images() {
         local dir="$1"
@@ -607,6 +604,12 @@ run_pipeline() {
     }
     flatten_images "$colmap_input" 2>/dev/null || true
     flatten_images "$DATASET_PATH/masks" 2>/dev/null || true
+
+    # Remove images from excluded camera indices (0-3 typically have obstruction)
+    for i in 0 1 2 3; do
+        rm -f "$colmap_input/pano_camera${i}_"*.jpg 2>/dev/null || true
+        rm -f "$colmap_input/pano_camera${i}_"*.png 2>/dev/null || true
+    done
 
     # Check panorama output exists
     if [[ ! -d "$colmap_input" ]]; then
