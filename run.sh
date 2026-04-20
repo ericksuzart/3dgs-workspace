@@ -194,33 +194,60 @@ run_colmap() {
     echo "  Dataset: $DATASET_PATH"
     echo "  Image:   $image"
     echo "  Memory:  ${CONTAINER_MEM:-$DEFAULT_MEM}"
+    echo "  Logs:    docker logs -f 3dgs-colmap"
     echo "=========================================="
     echo ""
 
-    local -a docker_args=(
-        "run" "--rm"
-        "--name" "3dgs-colmap"
-        "--user" "$(get_host_user)"
-        "--gpus" "all"
-        "--entrypoint" ""
-        "-v" "$DATASET_PATH:/dataset:rw"
-        "-v" "$(pwd):/workspace:rw"
-        "-w" "/workspace"
-        "-m" "${CONTAINER_MEM:-$DEFAULT_MEM}"
-        "--ipc=host"
-        "--ulimit" "memlock=-1" "--ulimit" "stack=67108864"
-    )
+    # Remove any existing container
+    docker rm -f 3dgs-colmap 2>/dev/null || true
 
     if [[ "$DETACHED" == "true" ]]; then
-        docker_args+=("-d")
+        docker run -d \
+            --name "3dgs-colmap" \
+            --user "$(get_host_user)" \
+            --gpus all \
+            --entrypoint "" \
+            -v "$DATASET_PATH:/dataset:rw" \
+            -v "$(pwd):/workspace:rw" \
+            -w /workspace \
+            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
+            --ipc=host \
+            --ulimit memlock=-1 --ulimit stack=67108864 \
+            "$image" \
+            bash convert.sh -s /dataset --resize --magick_executable ""
+
+        # Follow logs until completion
+        echo "Following COLMAP logs (Ctrl+C to detach, container continues)..."
+        docker logs -f 3dgs-colmap 2>&1 &
+        local logs_pid=$!
+        trap 'kill $logs_pid 2>/dev/null || true' INT
+        
+        docker wait 3dgs-colmap >/dev/null 2>&1
+        local exit_code=$?
+        kill $logs_pid 2>/dev/null || true
+        wait $logs_pid 2>/dev/null || true
+        docker rm -f 3dgs-colmap >/dev/null 2>&1 || true
+        trap - INT
+
+        if [[ "$exit_code" != "0" ]]; then
+            echo "ERROR: COLMAP failed with exit code $exit_code"
+            exit 1
+        fi
     else
-        docker_args+=("-it")
+        docker run --rm -it \
+            --name "3dgs-colmap" \
+            --user "$(get_host_user)" \
+            --gpus all \
+            --entrypoint "" \
+            -v "$DATASET_PATH:/dataset:rw" \
+            -v "$(pwd):/workspace:rw" \
+            -w /workspace \
+            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
+            --ipc=host \
+            --ulimit memlock=-1 --ulimit stack=67108864 \
+            "$image" \
+            bash convert.sh -s /dataset --resize --magick_executable ""
     fi
-
-    docker_args+=("$image")
-    docker_args+=("bash" "convert.sh" "-s" "/dataset" "--resize" "--magick_executable" "")
-
-    docker "${docker_args[@]}"
 }
 
 run_train() {
@@ -247,35 +274,56 @@ run_train() {
     echo "  Output:  $OUTPUT_PATH"
     echo "  Image:   $image"
     echo "  Memory: ${CONTAINER_MEM:-$DEFAULT_MEM}"
+    echo "  Logs:    docker logs -f 3dgs-workspace-train"
     echo "=========================================="
     echo ""
 
-    local -a docker_args=(
-        "run" "--rm"
-        "--name" "3dgs-workspace-train"
-        "--user" "$(get_host_user)"
-        "--gpus" "all"
-        "-v" "$DATASET_PATH:/dataset:rw"
-        "-v" "$OUTPUT_PATH:/output:rw"
-        "-w" "/dataset"
-        "-m" "${CONTAINER_MEM:-$DEFAULT_MEM}"
-        "--ipc=host"
-        "--ulimit" "memlock=-1" "--ulimit" "stack=67108864"
-    )
+    # Remove any existing container
+    docker rm -f 3dgs-workspace-train 2>/dev/null || true
 
     if [[ "$DETACHED" == "true" ]]; then
-        docker_args+=("-d")
-        # Add background log following
-        docker "${docker_args[@]}" \
-            bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}" &
+        docker run -d \
+            --name "3dgs-workspace-train" \
+            --user "$(get_host_user)" \
+            --gpus all \
+            -v "$DATASET_PATH:/dataset:rw" \
+            -v "$OUTPUT_PATH:/output:rw" \
+            -w /dataset \
+            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
+            --ipc=host \
+            --ulimit memlock=-1 --ulimit stack=67108864 \
+            "$image" \
+            bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}"
+
+        # Follow logs until completion
+        echo "Following Training logs (Ctrl+C to detach, container continues)..."
+        docker logs -f 3dgs-workspace-train 2>&1 &
         local logs_pid=$!
-        echo "Container started. Attach to logs with: docker logs -f 3dgs-workspace-train"
         trap 'kill $logs_pid 2>/dev/null || true' INT
+        
+        docker wait 3dgs-workspace-train >/dev/null 2>&1
+        local exit_code=$?
+        kill $logs_pid 2>/dev/null || true
         wait $logs_pid 2>/dev/null || true
-        docker stop 3dgs-workspace-train >/dev/null 2>&1 || true
+        docker rm -f 3dgs-workspace-train >/dev/null 2>&1 || true
+        trap - INT
+
+        if [[ "$exit_code" != "0" ]]; then
+            echo "ERROR: Training failed with exit code $exit_code"
+            exit 1
+        fi
     else
-        docker_args+=("-it")
-        docker "${docker_args[@]}" \
+        docker run --rm -it \
+            --name "3dgs-workspace-train" \
+            --user "$(get_host_user)" \
+            --gpus all \
+            -v "$DATASET_PATH:/dataset:rw" \
+            -v "$OUTPUT_PATH:/output:rw" \
+            -w /dataset \
+            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
+            --ipc=host \
+            --ulimit memlock=-1 --ulimit stack=67108864 \
+            "$image" \
             bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}"
     fi
 }
@@ -302,21 +350,24 @@ run_panorama() {
     echo "=========================================="
     echo "  Input:   $panorama_dir"
     echo "  Output:  $panorama_output"
-    echo "  Matcher: sequential"
+    echo "  Matcher: spatial"
     echo "  Render:  overlapping"
+    echo "  Logs:    docker logs -f 3dgs-panorama"
     echo "=========================================="
     echo ""
 
     local image
     image=$(resolve_image "panorama")
 
-    # Panorama always runs interactively to show progress
-    docker run --rm \
+    # Remove any existing container
+    docker rm -f 3dgs-panorama 2>/dev/null || true
+
+    # Run in detached mode
+    docker run -d \
         --name "3dgs-panorama" \
         --user "$(get_host_user)" \
         --gpus all \
         --entrypoint "" \
-        -it \
         -v "$DATASET_PATH:/dataset:rw" \
         -w /dataset \
         -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
@@ -326,8 +377,26 @@ run_panorama() {
         bash -c "python3 /colmap/python/examples/panorama_sfm.py \
             --input_image_path /dataset/panorama \
             --output_path /dataset \
-            --matcher sequential \
+            --matcher spatial \
             --pano_render_type overlapping"
+
+    # Follow logs until completion
+    echo "Following Panorama logs (Ctrl+C to detach, container continues)..."
+    docker logs -f 3dgs-panorama 2>&1 &
+    local logs_pid=$!
+    trap 'kill $logs_pid 2>/dev/null || true' INT
+    
+    docker wait 3dgs-panorama >/dev/null 2>&1
+    local exit_code=$?
+    kill $logs_pid 2>/dev/null || true
+    wait $logs_pid 2>/dev/null || true
+    docker rm -f 3dgs-panorama >/dev/null 2>&1 || true
+    trap - INT
+
+    if [[ "$exit_code" != "0" ]]; then
+        echo "ERROR: Panorama failed with exit code $exit_code"
+        exit 1
+    fi
 
     # Rename images/ to input/
     if [[ -d "$panorama_output/images" ]]; then
@@ -460,19 +529,21 @@ run_pipeline() {
     local image
     image=$(resolve_image "colmap")
 
-    # Stage 1: PanoramaSfM
-    echo ">>> Stage 1: Panorama SfM..."
+    # PanoramaSfM (detached with log following)
+    echo ">>> Panorama SfM (starting in background)..."
     echo "    Input:  $panorama_dir"
     echo "    Output: $DATASET_PATH"
+    echo "    Logs:   docker logs -f 3dgs-panorama-pipeline"
     echo ""
 
-    # Panorama always runs interactively to show progress
-    docker run --rm \
+    # Remove any existing container
+    docker rm -f 3dgs-panorama-pipeline 2>/dev/null || true
+
+    docker run -d \
         --name "3dgs-panorama-pipeline" \
         --user "$(get_host_user)" \
         --gpus all \
         --entrypoint "" \
-        -it \
         -v "$DATASET_PATH:/dataset:rw" \
         -w /dataset \
         -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
@@ -482,8 +553,27 @@ run_pipeline() {
         bash -c "python3 /colmap/python/examples/panorama_sfm.py \
             --input_image_path /dataset/panorama \
             --output_path /dataset \
-            --matcher sequential \
+            --matcher spatial \
             --pano_render_type overlapping"
+
+    # Follow logs until completion
+    echo "Following Panorama logs (Ctrl+C to detach, container continues)..."
+    docker logs -f 3dgs-panorama-pipeline 2>&1 &
+    local logs_pid=$!
+    trap 'kill $logs_pid 2>/dev/null || true' INT
+    
+    # Wait for container to finish
+    docker wait 3dgs-panorama-pipeline >/dev/null 2>&1
+    local exit_code=$?
+    kill $logs_pid 2>/dev/null || true
+    wait $logs_pid 2>/dev/null || true
+    docker rm -f 3dgs-panorama-pipeline >/dev/null 2>&1 || true
+    trap - INT
+
+    if [[ "$exit_code" != "0" ]]; then
+        echo "ERROR: Panorama stage failed with exit code $exit_code"
+        exit 1
+    fi
 
     # Rename images/ to input/
     if [[ -d "$DATASET_PATH/images" ]]; then
@@ -525,27 +615,46 @@ run_pipeline() {
     fi
 
     echo ""
-    echo ">>> Stage 2: Running COLMAP..."
-    echo "    Input:  $panorama_output"
+    echo ">>> Running COLMAP (starting in background)..."
+    echo "    Input:  $DATASET_PATH"
     echo "    Output: $colmap_images"
+    echo "    Logs:   docker logs -f 3dgs-colmap-pipeline"
+    echo ""
 
-    # Stage 2: COLMAP (uses input/ from panorama as input)
-    local -a colmap_args=(
-        "run" "--rm"
-        "--name" "3dgs-colmap-pipeline"
-        "--user" "$(get_host_user)"
-        "--gpus" "all"
-        "--entrypoint" ""
-        "-v" "$DATASET_PATH:/dataset:rw"
-        "-v" "$(pwd):/workspace:rw"
-        "-w" "/workspace"
-        "-m" "${CONTAINER_MEM:-$DEFAULT_MEM}"
-        "--ipc=host"
-        "--ulimit" "memlock=-1" "--ulimit" "stack=67108864"
-    )
+    # COLMAP (detached with log following)
+    docker rm -f 3dgs-colmap-pipeline 2>/dev/null || true
 
-    docker "${colmap_args[@]}" "$image" \
+    docker run -d \
+        --name "3dgs-colmap-pipeline" \
+        --user "$(get_host_user)" \
+        --gpus all \
+        --entrypoint "" \
+        -v "$DATASET_PATH:/dataset:rw" \
+        -v "$(pwd):/workspace:rw" \
+        -w /workspace \
+        -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
+        --ipc=host \
+        --ulimit memlock=-1 --ulimit stack=67108864 \
+        "$image" \
         bash convert.sh -s /dataset --resize --magick_executable ""
+
+    # Follow logs until completion
+    echo "Following COLMAP logs (Ctrl+C to detach, container continues)..."
+    docker logs -f 3dgs-colmap-pipeline 2>&1 &
+    logs_pid=$!
+    trap 'kill $logs_pid 2>/dev/null || true' INT
+    
+    docker wait 3dgs-colmap-pipeline >/dev/null 2>&1
+    exit_code=$?
+    kill $logs_pid 2>/dev/null || true
+    wait $logs_pid 2>/dev/null || true
+    docker rm -f 3dgs-colmap-pipeline >/dev/null 2>&1 || true
+    trap - INT
+
+    if [[ "$exit_code" != "0" ]]; then
+        echo "ERROR: COLMAP stage failed with exit code $exit_code"
+        exit 1
+    fi
 
     # Check colmap output exists
     if [[ ! -d "$colmap_images" ]]; then
@@ -554,13 +663,17 @@ run_pipeline() {
     fi
 
     echo ""
-    echo ">>> Stage 3: Running 3DGS Training..."
+    echo ">>> Running 3DGS Training (starting in background)..."
     echo "    Input:  $colmap_images"
     echo "    Output: $train_output"
+    echo "    Logs:   docker logs -f 3dgs-workspace-train"
+    echo ""
 
+    # Training (detached with log following)
     image=$(resolve_image "train")
+    docker rm -f 3dgs-workspace-train 2>/dev/null || true
 
-    docker run --rm \
+    docker run -d \
         --name "3dgs-workspace-train" \
         --user "$(get_host_user)" \
         --gpus all \
@@ -571,6 +684,19 @@ run_pipeline() {
         --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
         "$image" \
         bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}"
+
+    # Follow logs until completion
+    echo "Following Training logs (Ctrl+C to detach, container continues)..."
+    docker logs -f 3dgs-workspace-train 2>&1 &
+    logs_pid=$!
+    trap 'kill $logs_pid 2>/dev/null || true' INT
+    
+    docker wait 3dgs-workspace-train >/dev/null 2>&1
+    exit_code=$?
+    kill $logs_pid 2>/dev/null || true
+    wait $logs_pid 2>/dev/null || true
+    docker rm -f 3dgs-workspace-train >/dev/null 2>&1 || true
+    trap - INT
 
     echo ""
     echo ">>> Pipeline complete!"
