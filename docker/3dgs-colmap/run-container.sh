@@ -31,9 +31,15 @@ if [[ "$DETACHED" == "true" ]]; then
     # Remove any existing container with the same name (from previous failed runs)
     docker rm -f 3dgs-colmap >/dev/null 2>&1 || true
     
+    # Pass host UID/GID so files created inside the container are owned by
+    # the host user — no sudo or chown needed on the host side.
+    HOST_UID="$(id -u)"
+    HOST_GID="$(id -g)"
+    
     echo "Starting container in detached mode..."
     docker run -d \
       --name 3dgs-colmap \
+      --user "${HOST_UID}:${HOST_GID}" \
       --gpus all \
       --entrypoint "" \
       -m "${CONTAINER_MEM:-12g}" \
@@ -70,8 +76,14 @@ if [[ "$DETACHED" == "true" ]]; then
     # Remove the trap
     trap - INT
 else
+    # Pass host UID/GID so files created inside the container are owned by
+    # the host user — no sudo or chown needed on the host side.
+    HOST_UID="$(id -u)"
+    HOST_GID="$(id -g)"
+    
     docker run --rm \
       --name 3dgs-colmap \
+      --user "${HOST_UID}:${HOST_GID}" \
       --gpus all \
       --entrypoint "" \
       -it \
