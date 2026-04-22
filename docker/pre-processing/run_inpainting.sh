@@ -44,24 +44,10 @@
 #
 #   # Skip rebuild (image already built)
 #   SKIP_BUILD=1 DATASET_PATH=~/captures/scene1 ./run_inpaint.sh
-#
-# X11 / DISPLAY NOTES:
-#   Linux  : Works out of the box. xhost +local:docker is callzed automatically.
-#   macOS  : Requires XQuartz (https://www.xquartz.org).
-#              1. Open XQuartz > Preferences > Security
-#                 Enable "Allow connections from network clients"
-#              2. Restart XQuartz, then run:
-#                 xhost +127.0.0.1
-#              3. Export DISPLAY before running this script:
-#                 export DISPLAY=:0
-#            The script detects macOS and sets DISPLAY to host.docker.internal:0
-#            automatically if you haven't set it.
-#   WSL2   : Install an X server on Windows (VcXsrv or X410).
-#            Set DISPLAY=<Windows-IP>:0.0 before running.
 # =============================================================================
 set -euo pipefail
 
-# ---- Colours -----------------------------------------------------------------
+# Colours
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info()    { echo -e "${CYAN}[INFO]${NC}  $*"; }
@@ -71,7 +57,7 @@ error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ---- Config ------------------------------------------------------------------
+# Config
 IMAGE_NAME="${IMAGE_NAME:-lama-inpaint:latest}"
 MODE="${MODE:-full}"
 DILATION_ITER="${DILATION_ITER:-10}"
@@ -79,7 +65,7 @@ BLUR_KERNEL="${BLUR_KERNEL:-21}"
 JPEG_QUALITY="${JPEG_QUALITY:-95}"
 DISPLAY_SCALE="${DISPLAY_SCALE:-0.5}"
 
-# ---- Validate DATASET_PATH ---------------------------------------------------
+# Validate DATASET_PATH
 if [[ -z "${DATASET_PATH:-}" ]]; then
     error "DATASET_PATH is not set.\n  Example: DATASET_PATH=/path/to/images ./run_inpaint.sh"
 fi
@@ -88,7 +74,7 @@ if [[ ! -d "$DATASET_PATH" ]]; then
 fi
 DATASET_PATH="$(cd "$DATASET_PATH" && pwd)"
 
-# ---- X11 / Display setup -----------------------------------------------------
+# X11 / Display setup
 OS="$(uname -s)"
 DOCKER_OPTS=()
 
@@ -131,7 +117,7 @@ else
     fi
 fi
 
-# ---- Build -------------------------------------------------------------------
+# Build
 if [[ "${SKIP_BUILD:-0}" == "1" ]]; then
     warn "SKIP_BUILD=1 — skipping docker build."
 else
@@ -143,7 +129,7 @@ else
     success "Image built: $IMAGE_NAME"
 fi
 
-# ---- GPU detection -----------------------------------------------------------
+# GPU detection
 GPU_FLAGS=()
 if command -v nvidia-smi &>/dev/null \
    && nvidia-smi --query-gpu=name --format=csv,noheader &>/dev/null; then
@@ -155,7 +141,7 @@ else
     warn "SAM inference on CPU is slow. Expect ~10-30 s per mask on large images."
 fi
 
-# ---- Summary -----------------------------------------------------------------
+# Summary
 echo ""
 echo -e "${BOLD}${CYAN}┌─ Run configuration ─────────────────────────────────────────────┐${NC}"
 echo -e "${CYAN}│${NC}  Mode           : $MODE"
@@ -170,7 +156,7 @@ echo -e "${CYAN}│${NC}  DISPLAY        : ${DISPLAY:-unset}"
 echo -e "${CYAN}└─────────────────────────────────────────────────────────────────┘${NC}"
 echo ""
 
-# ---- Run ---------------------------------------------------------------------
+# Run
 info "Starting container ..."
 docker run --rm \
     "${GPU_FLAGS[@]+"${GPU_FLAGS[@]}"}" \

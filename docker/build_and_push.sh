@@ -32,7 +32,14 @@ IMAGE_DIR="${SCRIPT_DIR}/${IMAGE_NAME}"
 
 if [[ ! -d "$IMAGE_DIR" ]]; then
     echo "ERROR: Image directory '${IMAGE_DIR}' does not exist."
-    echo "Available images: $(ls -1 "${SCRIPT_DIR}" | grep -v '\.sh$' | grep -v 'pre-processing' | tr '\n' ' ')"
+    # List available image directories (exclude *.sh and pre-processing)
+    local_dirs=()
+    for d in "${SCRIPT_DIR}"/*/; do
+        base="$(basename "$d")"
+        [[ "$base" == "pre-processing" ]] && continue
+        local_dirs+=("$base")
+    done
+    echo "Available images: ${local_dirs[*]}"
     exit 1
 fi
 

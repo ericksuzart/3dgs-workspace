@@ -5,61 +5,52 @@ set -euo pipefail
 # 3DGS Workspace - Unified CLI
 # =============================================================================
 #
-# A single entry point for all 3DGS workspace operations.
-# Works equivalently to running Docker Hub images directly.
+# A single entry point for Gaussian Splatting scene reconstruction.
+# Supports both 360° panorama and regular photo workflows.
 #
 # Usage:
 #   ./run.sh <command> [options]
 #
 # Commands:
-#   colmap     Run COLMAP preprocessing (SfM)
-#   train     Run 3DGS training
-#   inpaint   Run interactive 360° image cleanup
-#   pipeline  Run full pipeline (panorama -> colmap -> train)
+#   panorama   Process 360° equirectangular images (panorama/ → images/)
+#   colmap     Run COLMAP SfM on regular photos (input/ → images/ + sparse/0/)
+#   train      Run 3D Gaussian Splatting training (images/ → output/)
+#   inpaint    Interactive 360° image cleanup
+#   pipeline   Full pipeline: (panorama|photos) → train
 #
 # Options:
 #   --dataset PATH   Dataset path (required)
-#   --output PATH   Output path (default: ./output)
-#   --image IMAGE   Docker image to use
-#   --local        Use local image only (don't pull)
-#   --pull         Force pull from Docker Hub
-#   --detach      Run in detached mode
-#   --help        Show this help
+#   --mode MODE      Pipeline mode: panorama | photos (required for pipeline)
+#   --output PATH    Training output directory (default: dataset/output)
+#   --resolution N   Training resolution (1=full, 2=half, default: 1)
+#   --pull           Force pull latest images from Docker Hub
+#   --help           Show this help
 #
-# Examples:
-#   ./run.sh train --dataset /data/scene
-#   ./run.sh colmap --dataset /data/scene
-#   ./run.sh pipeline --dataset /data/panorama
+# Dataset structure:
+#   Panorama:  dataset/panorama/*.jpg  →  run panorama  →  dataset/images/
+#   Photos:    dataset/input/*.jpg     →  run colmap    →  dataset/images/ + sparse/0/
+#   Training:  dataset/images/ + sparse/0/  →  run train  →  dataset/output/
 #
-# Docker Hub Images:
-#   ericksuzart/3dgsworkspace   - Training
-#   ericksuzart/3dgs-colmap     - COLMAP
-#   ericksuzart/lama-inpaint    - Inpainting
+# Docker images (local-first, pulled from Hub if missing):
+#   3dgs-colmap      - COLMAP + Panorama SfM
+#   3dgsworkspace    - 3DGS Training
+#   lama-inpaint     - Inpainting
 # =============================================================================
 
-# Configuration
 DOCKER_HUB_ORG="ericksuzart"
 DEFAULT_MEM="15g"
 
-# Image mappings
-declare -A IMAGES=(
-    ["colmap"]="3dgs-colmap"
-    ["train"]="3dgsworkspace"
-    ["inpaint"]="lama-inpaint"
-    ["panorama"]="3dgs-colmap"
-    ["pipeline"]="3dgs-colmap"
-)
-
-# Default values
+# Defaults
 COMMAND=""
 DATASET_PATH=""
 OUTPUT_PATH=""
-RESOLUTION=""
-USE_LOCAL="${LOCAL:-false}"
-FORCE_PULL="${PULL:-false}"
-DETACHED="${DETACHED:-true}"
+RESOLUTION="4"
+MODE=""
+FORCE_PULL="false"
 
-show_help() {
+# Helpers
+
+usage() {
     cat <<EOF
 3DGS Workspace - Unified CLI
 ========================================
@@ -68,420 +59,241 @@ Usage:
   ./run.sh <command> [options]
 
 Commands:
-  colmap     Run COLMAP preprocessing (SfM)
-  train     Run 3DGS training
-  panorama  Run Panorama SfM (360° images -> COLMAP input)
-  inpaint   Run interactive 360° image cleanup
-  pipeline  Run full pipeline: panorama -> colmap -> train
+  panorama   Process 360° equirectangular images (panorama/ → images/)
+  colmap     Run COLMAP SfM on regular photos (input/ → images/ + sparse/0/)
+  train      Run 3D Gaussian Splatting training (images/ → output/)
+  inpaint    Interactive 360° image cleanup
+  pipeline   Full pipeline: (panorama|photos) → train
 
 Options:
-  --dataset PATH   Dataset path (required for colmap, train, panorama, pipeline)
-  --output PATH   Output directory (default: DATASET_PATH/output)
-  --resolution N  Native resolution (1 = full resolution, 2 = half, 4 = quarter, etc.)
-  --image NAME   Docker image to use (default: auto-resolve)
-  --local       Prefer local image, don't pull from Hub
-  --pull        Force pull from Docker Hub
-  --detach      Run in detached mode (background)
-  --help        Show this help
+  --dataset PATH   Dataset path (required)
+  --mode MODE      Pipeline mode: panorama | photos (required for pipeline)
+  --output PATH    Training output directory (default: dataset/output)
+  --resolution N   Training resolution (1=full, 2=half, default: 1)
+  --pull           Force pull latest images from Docker Hub
+  --help           Show this help
 
-Environment Variables:
-  DATASET_PATH    Dataset path (alternative to --dataset)
-  OUTPUT_PATH     Output path (alternative to --output)
-  CONTAINER_MEM    Memory limit (default: 12g)
-  LOCAL            Prefer local image (true/false)
-  PULL             Force pull from Hub (true/false)
+Dataset structure:
+  Panorama:  dataset/panorama/*.jpg  →  run panorama  →  dataset/images/
+  Photos:    dataset/input/*.jpg     →  run colmap    →  dataset/images/ + sparse/0/
+  Training:  dataset/images/ + sparse/0/  →  run train  →  dataset/output/
 
 Examples:
-  # Panorama SfM (360° images -> COLMAP input)
-  ./run.sh panorama --dataset /data/panorama
+  ./run.sh panorama --dataset /data/scene
+  ./run.sh colmap   --dataset /data/scene
+  ./run.sh train    --dataset /data/scene
+  ./run.sh train    --dataset /data/scene --resolution 2
+  ./run.sh pipeline --dataset /data/scene --mode panorama
+  ./run.sh pipeline --dataset /data/scene --mode photos
+  ./run.sh inpaint  --dataset /data/360
 
-  # COLMAP preprocessing (input/ -> images/)
-  ./run.sh colmap --dataset /data/my-scene
-
-  # Training (full resolution)
-  ./run.sh train --dataset /data/my-scene --resolution 1
-
-  # Training (half resolution - faster)
-  ./run.sh train --dataset /data/my-scene --resolution 2
-
-  # Full pipeline (panorama -> colmap -> train)
-  ./run.sh pipeline --dataset /data/panorama
-
-  # Inpaint (interactive 360° cleanup)
-  ./run.sh inpaint --dataset /data/360
-
-  # Force pull new image from Hub
-  ./run.sh train --dataset /data/my-scene --pull
-
-Docker Images (auto-resolved):
-  ${DOCKER_HUB_ORG}/3dgsworkspace   Training
-  ${DOCKER_HUB_ORG}/3dgs-colmap    COLMAP
-  ${DOCKER_HUB_ORG}/lama-inpaint  Inpainting
+Run in background:
+  screen -dmS 3dgs ./run.sh pipeline --dataset /data/scene --mode panorama
 EOF
 }
 
-resolve_image() {
-    local image_key="$1"
-    local image_name="${IMAGES[$image_key]}"
-    local dockerhub="${DOCKER_HUB_ORG}/${image_name}"
-    local local="${image_name}:latest"
-
-    if [[ "$FORCE_PULL" == "true" ]]; then
-        echo "$dockerhub"
-    elif [[ "$USE_LOCAL" == "true" ]]; then
-        if docker image inspect "$local" >/dev/null 2>&1; then
-            echo "$local"
-        else
-            echo "$dockerhub"
-        fi
-    else
-        # Default: prefer local, fallback to hub
-        if docker image inspect "$local" >/dev/null 2>&1; then
-            echo "$local"
-        elif docker image inspect "$dockerhub" >/dev/null 2>&1; then
-            echo "$dockerhub"
-        else
-            echo "$dockerhub"
-        fi
-    fi
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
 }
 
-check_dataset() {
-    local required="$1"
-    if [[ -z "$DATASET_PATH" ]]; then
-        echo "ERROR: --dataset is required for $required"
-        echo "Usage: ./run.sh $COMMAND --dataset /path/to/dataset"
-        exit 1
-    fi
-    if [[ ! -d "$DATASET_PATH" ]]; then
-        echo "ERROR: Dataset path does not exist: $DATASET_PATH"
-        exit 1
-    fi
+ensure_dataset() {
+    [[ -n "$DATASET_PATH" ]] || die "--dataset is required"
+    [[ -d "$DATASET_PATH" ]] || die "Dataset path does not exist: $DATASET_PATH"
     DATASET_PATH="$(cd "$DATASET_PATH" && pwd)"
 }
 
-check_input_dir() {
-    local stage="$1"
-    if [[ ! -d "$DATASET_PATH/input" ]]; then
-        echo "ERROR: $stage requires $DATASET_PATH/input/ (raw images)"
-        echo "Place raw images in $DATASET_PATH/input/ first."
-        exit 1
-    fi
-}
-
-check_colmap_output() {
-    if [[ ! -d "$DATASET_PATH/images" ]] || [[ ! -d "$DATASET_PATH/sparse/0" ]]; then
-        echo "ERROR: Training requires $DATASET_PATH/images/ and $DATASET_PATH/sparse/0/"
-        echo "Run 'make colmap' or './run.sh colmap' first."
-        exit 1
-    fi
-}
-
-get_host_user() {
+host_user() {
     echo "$(id -u):$(id -g)"
 }
 
-run_colmap() {
-    check_dataset "colmap"
-    check_input_dir "colmap"
+# Resolve Docker image: local first, fallback to Hub
+resolve_image() {
+    local name="$1"
+    local local_img="${name}:latest"
+    local hub_img="${DOCKER_HUB_ORG}/${name}"
+
+    if [[ "$FORCE_PULL" == "true" ]]; then
+        docker pull "$hub_img"
+        echo "$hub_img"
+        return
+    fi
+
+    # Prefer local if available
+    if docker image inspect "$local_img" >/dev/null 2>&1; then
+        echo "$local_img"
+        return
+    fi
+
+    # Try pulling from Hub
+    echo "Pulling ${hub_img} from Docker Hub..."
+    docker pull "$hub_img"
+    echo "$hub_img"
+}
+
+# Run a container interactively (foreground)
+run_container() {
+    docker run --rm -it \
+        --user "$(host_user)" \
+        --gpus all \
+        -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
+        --ipc=host \
+        --ulimit memlock=-1 --ulimit stack=67108864 \
+        "$@"
+}
+
+# Commands
+
+cmd_panorama() {
+    ensure_dataset
+    [[ -d "$DATASET_PATH/panorama" ]] || die "No panorama/ directory found in $DATASET_PATH"
 
     local image
-    image=$(resolve_image "colmap")
+    image=$(resolve_image "3dgs-colmap")
+
+    echo "=========================================="
+    echo "  Panorama SfM"
+    echo "=========================================="
+    echo "  Dataset: $DATASET_PATH"
+    echo "  Image:   $image"
+    echo "=========================================="
+    echo ""
+
+    run_container \
+        --entrypoint "" \
+        -v "$DATASET_PATH:/dataset:rw" \
+        -w /dataset \
+        "$image" \
+        bash -c "python3 /colmap/python/examples/panorama_sfm.py \
+            --input_image_path /dataset/panorama \
+            --output_path /dataset \
+            --matcher exhaustive \
+            --pano_render_type overlapping"
+
+    # Remove obstruction cameras (0-3) from images and COLMAP sparse files
+    for i in 0 1 2 3; do
+        rm -rf "$DATASET_PATH/images/pano_camera${i}" 2>/dev/null || true
+    done
+
+    # Clean COLMAP sparse/0/ to remove references to deleted images
+    docker run --rm \
+        --user "$(host_user)" \
+        --entrypoint /usr/bin/python3 \
+        -v "$DATASET_PATH:/dataset:rw" \
+        -w /dataset \
+        "$image" \
+        /usr/local/bin/clean_colmap_sparse.py /dataset "_camera0,_camera1,_camera2,_camera3" || true
+
+    # Verify sparse reconstruction succeeded
+    if [[ ! -f "$DATASET_PATH/sparse/0/images.bin" ]] && [[ ! -f "$DATASET_PATH/sparse/0/images.txt" ]]; then
+        die "Panorama SfM failed to create a sparse model. Try with more panorama images (at least 3 with good overlap)."
+    fi
+
+    local count
+    count=$(find "$DATASET_PATH/images" -maxdepth 1 -type d 2>/dev/null | wc -l)
+    echo ""
+    echo "=========================================="
+    echo "  Panorama complete"
+    echo "  Cameras: $((count - 1)) → $DATASET_PATH/images/"
+    echo "  Sparse:  $DATASET_PATH/sparse/"
+    echo "=========================================="
+}
+
+cmd_colmap() {
+    ensure_dataset
+    [[ -d "$DATASET_PATH/input" ]] || die "No input/ directory found in $DATASET_PATH"
+
+    local image
+    image=$(resolve_image "3dgs-colmap")
 
     echo "=========================================="
     echo "  COLMAP Preprocessing"
     echo "=========================================="
     echo "  Dataset: $DATASET_PATH"
     echo "  Image:   $image"
-    echo "  Memory:  ${CONTAINER_MEM:-$DEFAULT_MEM}"
-    echo "  Logs:    docker logs -f 3dgs-colmap"
     echo "=========================================="
     echo ""
 
-    # Remove any existing container
-    docker rm -f 3dgs-colmap 2>/dev/null || true
+    run_container \
+        --entrypoint "" \
+        -v "$DATASET_PATH:/dataset:rw" \
+        -v "$(pwd):/workspace:rw" \
+        -w /workspace \
+        "$image" \
+        bash convert.sh -s /dataset --resize --magick_executable ""
 
-    if [[ "$DETACHED" == "true" ]]; then
-        docker run -d \
-            --name "3dgs-colmap" \
-            --user "$(get_host_user)" \
-            --gpus all \
-            --entrypoint "" \
-            -v "$DATASET_PATH:/dataset:rw" \
-            -v "$(pwd):/workspace:rw" \
-            -w /workspace \
-            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-            --ipc=host \
-            --ulimit memlock=-1 --ulimit stack=67108864 \
-            "$image" \
-            bash convert.sh -s /dataset --resize --magick_executable ""
-
-        # Follow logs until completion
-        echo "Following COLMAP logs (Ctrl+C to detach, container continues)..."
-        docker logs -f 3dgs-colmap 2>&1 &
-        local logs_pid=$!
-        trap 'kill $logs_pid 2>/dev/null || true' INT
-        
-        docker wait 3dgs-colmap >/dev/null 2>&1
-        local exit_code=$?
-        kill $logs_pid 2>/dev/null || true
-        wait $logs_pid 2>/dev/null || true
-        docker rm -f 3dgs-colmap >/dev/null 2>&1 || true
-        trap - INT
-
-        if [[ "$exit_code" != "0" ]]; then
-            echo "ERROR: COLMAP failed with exit code $exit_code"
-            exit 1
-        fi
-    else
-        docker run --rm -it \
-            --name "3dgs-colmap" \
-            --user "$(get_host_user)" \
-            --gpus all \
-            --entrypoint "" \
-            -v "$DATASET_PATH:/dataset:rw" \
-            -v "$(pwd):/workspace:rw" \
-            -w /workspace \
-            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-            --ipc=host \
-            --ulimit memlock=-1 --ulimit stack=67108864 \
-            "$image" \
-            bash convert.sh -s /dataset --resize --magick_executable ""
+    # Verify sparse reconstruction succeeded
+    if [[ ! -f "$DATASET_PATH/sparse/0/images.bin" ]] && [[ ! -f "$DATASET_PATH/sparse/0/images.txt" ]]; then
+        die "COLMAP failed to create a sparse model. Check image overlap and quality."
     fi
+
+    echo ""
+    echo "=========================================="
+    echo "  COLMAP complete"
+    echo "  Images: $DATASET_PATH/images/"
+    echo "  Sparse: $DATASET_PATH/sparse/0/"
+    echo "=========================================="
 }
 
-run_train() {
-    check_dataset "train"
+cmd_train() {
+    ensure_dataset
+    [[ -d "$DATASET_PATH/images" ]] || die "No images/ directory found in $DATASET_PATH"
+    [[ -d "$DATASET_PATH/sparse/0" ]] || die "No sparse/0/ directory found. Run panorama or colmap first."
 
-    # Also allow running if images/ + sparse/0 exist (already processed)
-    if [[ ! -d "$DATASET_PATH/images" ]] && [[ ! -d "$DATASET_PATH/sparse/0" ]]; then
-        if [[ -d "$DATASET_PATH/input" ]]; then
-            echo "ERROR: Data not processed. Run colmap first."
-            echo "  ./run.sh colmap --dataset $DATASET_PATH"
-            exit 1
-        fi
-    fi
+    local output="${OUTPUT_PATH:-$DATASET_PATH/output}"
+    mkdir -p "$output"
+    chown "$(id -u):$(id -g)" "$output" 2>/dev/null || true
 
     local image
-    image=$(resolve_image "train")
-
-    OUTPUT_PATH="${OUTPUT_PATH:-$DATASET_PATH/output}"
+    image=$(resolve_image "3dgsworkspace")
 
     echo "=========================================="
     echo "  3D Gaussian Splatting Training"
     echo "=========================================="
-    echo "  Dataset: $DATASET_PATH"
-    echo "  Output:  $OUTPUT_PATH"
-    echo "  Image:   $image"
-    echo "  Memory: ${CONTAINER_MEM:-$DEFAULT_MEM}"
-    echo "  Logs:    docker logs -f 3dgs-workspace-train"
+    echo "  Dataset:  $DATASET_PATH"
+    echo "  Output:   $output"
+    echo "  Image:    $image"
+    echo "  Res:      $RESOLUTION"
     echo "=========================================="
     echo ""
 
-    # Remove any existing container
-    docker rm -f 3dgs-workspace-train 2>/dev/null || true
-
-    if [[ "$DETACHED" == "true" ]]; then
-        docker run -d \
-            --name "3dgs-workspace-train" \
-            --user "$(get_host_user)" \
-            --gpus all \
-            -v "$DATASET_PATH:/dataset:rw" \
-            -v "$OUTPUT_PATH:/output:rw" \
-            -w /dataset \
-            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-            --ipc=host \
-            --ulimit memlock=-1 --ulimit stack=67108864 \
-            "$image" \
-            bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}"
-
-        # Follow logs until completion
-        echo "Following Training logs (Ctrl+C to detach, container continues)..."
-        docker logs -f 3dgs-workspace-train 2>&1 &
-        local logs_pid=$!
-        trap 'kill $logs_pid 2>/dev/null || true' INT
-        
-        docker wait 3dgs-workspace-train >/dev/null 2>&1
-        local exit_code=$?
-        kill $logs_pid 2>/dev/null || true
-        wait $logs_pid 2>/dev/null || true
-        docker rm -f 3dgs-workspace-train >/dev/null 2>&1 || true
-        trap - INT
-
-        if [[ "$exit_code" != "0" ]]; then
-            echo "ERROR: Training failed with exit code $exit_code"
-            exit 1
-        fi
-    else
-        docker run --rm -it \
-            --name "3dgs-workspace-train" \
-            --user "$(get_host_user)" \
-            --gpus all \
-            -v "$DATASET_PATH:/dataset:rw" \
-            -v "$OUTPUT_PATH:/output:rw" \
-            -w /dataset \
-            -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-            --ipc=host \
-            --ulimit memlock=-1 --ulimit stack=67108864 \
-            "$image" \
-            bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}"
-    fi
-}
-
-run_panorama() {
-    check_dataset "panorama"
-
-    # Check for panorama images
-    local panorama_dir="$DATASET_PATH/panorama"
-    if [[ ! -d "$panorama_dir" ]]; then
-        if [[ -n "$(ls -A "$DATASET_PATH"/*.jpg "$DATASET_PATH"/*.png 2>/dev/null)" ]]; then
-            panorama_dir="$DATASET_PATH"
-        else
-            echo "ERROR: No images found in $DATASET_PATH/panorama/"
-            exit 1
-        fi
-    fi
-
-    # Panorama outputs to $DATASET_PATH, then we rename images/ to input/
-    local panorama_output="$DATASET_PATH"
-
-    echo "=========================================="
-    echo "  Panorama SfM"
-    echo "=========================================="
-    echo "  Input:   $panorama_dir"
-    echo "  Output:  $panorama_output"
-    echo "  Matcher: spatial"
-    echo "  Render:  overlapping"
-    echo "  Logs:    docker logs -f 3dgs-panorama"
-    echo "=========================================="
-    echo ""
-
-    local image
-    image=$(resolve_image "panorama")
-
-    # Remove any existing container
-    docker rm -f 3dgs-panorama 2>/dev/null || true
-
-    # Run in detached mode
-    docker run -d \
-        --name "3dgs-panorama" \
-        --user "$(get_host_user)" \
-        --gpus all \
-        --entrypoint "" \
+    run_container \
         -v "$DATASET_PATH:/dataset:rw" \
+        -v "$output:/output:rw" \
         -w /dataset \
-        -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-        --ipc=host \
-        --ulimit memlock=-1 --ulimit stack=67108864 \
+        -e PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024 \
         "$image" \
-        bash -c "python3 /colmap/python/examples/panorama_sfm.py \
-            --input_image_path /dataset/panorama \
-            --output_path /dataset \
-            --matcher spatial \
-            --pano_render_type overlapping"
+        bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output -r $RESOLUTION"
 
-    # Follow logs until completion
-    echo "Following Panorama logs (Ctrl+C to detach, container continues)..."
-    docker logs -f 3dgs-panorama 2>&1 &
-    local logs_pid=$!
-    trap 'kill $logs_pid 2>/dev/null || true' INT
-    
-    docker wait 3dgs-panorama >/dev/null 2>&1
-    local exit_code=$?
-    kill $logs_pid 2>/dev/null || true
-    wait $logs_pid 2>/dev/null || true
-    docker rm -f 3dgs-panorama >/dev/null 2>&1 || true
-    trap - INT
-
-    if [[ "$exit_code" != "0" ]]; then
-        echo "ERROR: Panorama failed with exit code $exit_code"
-        exit 1
-    fi
-
-    # Rename images/ to input/
-    if [[ -d "$panorama_output/images" ]]; then
-        if [[ -d "$panorama_output/input" ]]; then
-            rm -rf "$panorama_output/input"
-        fi
-        mv "$panorama_output/images" "$panorama_output/input"
-    fi
-
-    # Flatten images first
-    flatten_images() {
-        local dir="$1"
-        if [[ ! -d "$dir" ]]; then return; fi
-        for subdir in "$dir"/*/; do
-            [[ -d "$subdir" ]] || continue
-            local prefix
-            prefix="$(basename "$subdir")"
-            for f in "$subdir"/*; do
-                [[ -f "$f" ]] || continue
-                local name
-                name="$(basename "$f")"
-                cp "$f" "${dir}/${prefix}_${name}"
-            done
-        done
-        find "$dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
-    }
-    flatten_images "$panorama_output/input" 2>/dev/null || true
-    flatten_images "$panorama_output/masks" 2>/dev/null || true
-
-    # Remove images from excluded camera indices (0-3 typically have obstruction)
-    # These were flattened with prefix pano_camera0_, pano_camera1_, etc.
-    for i in 0 1 2 3; do
-        rm -f "$panorama_output/input/pano_camera${i}_"*.jpg 2>/dev/null || true
-        rm -f "$panorama_output/input/pano_camera${i}_"*.png 2>/dev/null || true
-    done
-
-    # Summary
     echo ""
     echo "=========================================="
-    echo "  Panorama complete"
-    echo "=========================================="
-    if [[ -d "$panorama_output/input" ]]; then
-        img_count=$(find "$panorama_output/input" -maxdepth 1 -type f | wc -l)
-        echo "  Images: $img_count -> $panorama_output/input/"
-    fi
-    if [[ -d "$panorama_output/masks" ]]; then
-        mask_count=$(find "$panorama_output/masks" -maxdepth 1 -type f | wc -l)
-        echo "  Masks:  $mask_count -> $panorama_output/masks/"
-    fi
-    echo "  Database: $panorama_output/database.db"
-    echo "  Sparse:   $panorama_output/sparse/"
+    echo "  Training complete"
+    echo "  Output: $output"
     echo "=========================================="
 }
 
-run_inpaint() {
-    if [[ -z "$DATASET_PATH" ]]; then
-        DATASET_PATH="${DATASET_PATH:-./data}"
-    fi
-    if [[ ! -d "$DATASET_PATH" ]]; then
-        echo "ERROR: Dataset path does not exist: $DATASET_PATH"
-        exit 1
-    fi
-    DATASET_PATH="$(cd "$DATASET_PATH" && pwd)"
+cmd_inpaint() {
+    ensure_dataset
 
     local image
-    image=$(resolve_image "inpaint")
+    image=$(resolve_image "lama-inpaint")
 
     echo "=========================================="
     echo "  Interactive Inpainting"
     echo "=========================================="
     echo "  Dataset: $DATASET_PATH"
     echo "  Image:   $image"
-    echo "  Memory: ${CONTAINER_MEM:-$DEFAULT_MEM}"
     echo "=========================================="
     echo ""
 
-    # X11 forwarding
     local display_arg=()
     if [[ -n "${DISPLAY:-}" ]]; then
-        display_arg=("-e" "DISPLAY=$DISPLAY")
+        display_arg=(-e "DISPLAY=$DISPLAY")
     fi
 
     docker run --rm -it \
         --gpus all \
-        --user "$(get_host_user)" \
+        --user "$(host_user)" \
         -v "$DATASET_PATH:/data:rw" \
         -v "/tmp/.X11-unix:/tmp/.X11-unix:rw" \
         -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
@@ -492,319 +304,98 @@ run_inpaint() {
         "$image"
 }
 
-run_pipeline() {
-    check_dataset "pipeline"
+cmd_pipeline() {
+    ensure_dataset
+    [[ -n "$MODE" ]] || die "--mode is required for pipeline (panorama|photos)"
+    [[ "$MODE" == "panorama" || "$MODE" == "photos" ]] || die "Invalid mode: $MODE (must be panorama or photos)"
 
-    # Check for panorama images
-    local panorama_dir="$DATASET_PATH/panorama"
-    if [[ ! -d "$panorama_dir" ]]; then
-        if [[ -n "$(ls -A "$DATASET_PATH"/*.jpg "$DATASET_PATH"/*.png 2>/dev/null)" ]]; then
-            panorama_dir="$DATASET_PATH"
-        elif [[ -z "$(ls -A "$DATASET_PATH"/* 2>/dev/null)" ]]; then
-            echo "ERROR: No images found in $DATASET_PATH"
-            exit 1
-        fi
-    fi
-
-    # Set output paths
-    local colmap_input="$DATASET_PATH/input"    # Created from panorama images/
-    local colmap_images="$DATASET_PATH/images"    # COLMAP output
-    local colmap_sparse="$DATASET_PATH/sparse/0" # COLMAP sparse
-    local train_output="$DATASET_PATH/output"   # Training output
+    local output="${OUTPUT_PATH:-$DATASET_PATH/output}"
 
     echo "=========================================="
     echo "  Full Pipeline"
-    echo "  (Panorama -> COLMAP -> Training)"
     echo "=========================================="
     echo "  Dataset: $DATASET_PATH"
+    echo "  Mode:    $MODE"
+    echo "  Output:  $output"
     echo "=========================================="
     echo ""
-    echo "  Pipeline structure:"
-    echo "    $DATASET_PATH/panorama/  -> INPUT (raw 360° images)"
-    echo "    $DATASET_PATH/        -> PANORAMA OUTPUT"
-    echo "    $DATASET_PATH/input/   -> (images/ renamed after panorama)"
-    echo "    $DATASET_PATH/images/  -> COLMAP OUTPUT"
-    echo "    $DATASET_PATH/sparse/0/ -> COLMAP SPARSE"
-    echo "    $DATASET_PATH/output/ -> TRAINING OUTPUT"
-    echo ""
 
-    local image
-    image=$(resolve_image "colmap")
-
-    # PanoramaSfM (detached with log following)
-    echo ">>> Panorama SfM (starting in background)..."
-    echo "    Input:  $panorama_dir"
-    echo "    Output: $DATASET_PATH"
-    echo "    Logs:   docker logs -f 3dgs-panorama-pipeline"
-    echo ""
-
-    # Remove any existing container
-    docker rm -f 3dgs-panorama-pipeline 2>/dev/null || true
-
-    docker run -d \
-        --name "3dgs-panorama-pipeline" \
-        --user "$(get_host_user)" \
-        --gpus all \
-        --entrypoint "" \
-        -v "$DATASET_PATH:/dataset:rw" \
-        -w /dataset \
-        -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-        --ipc=host \
-        --ulimit memlock=-1 --ulimit stack=67108864 \
-        "$image" \
-        bash -c "python3 /colmap/python/examples/panorama_sfm.py \
-            --input_image_path /dataset/panorama \
-            --output_path /dataset \
-            --matcher spatial \
-            --pano_render_type overlapping"
-
-    # Follow logs until completion
-    echo "Following Panorama logs (Ctrl+C to detach, container continues)..."
-    docker logs -f 3dgs-panorama-pipeline 2>&1 &
-    local logs_pid=$!
-    trap 'kill $logs_pid 2>/dev/null || true' INT
-    
-    # Wait for container to finish
-    docker wait 3dgs-panorama-pipeline >/dev/null 2>&1
-    local exit_code=$?
-    kill $logs_pid 2>/dev/null || true
-    wait $logs_pid 2>/dev/null || true
-    docker rm -f 3dgs-panorama-pipeline >/dev/null 2>&1 || true
-    trap - INT
-
-    if [[ "$exit_code" != "0" ]]; then
-        echo "ERROR: Panorama stage failed with exit code $exit_code"
-        exit 1
+    if [[ "$MODE" == "panorama" ]]; then
+        echo ">>> Step 1/2: Panorama SfM"
+        cmd_panorama
+        echo ""
+    elif [[ "$MODE" == "photos" ]]; then
+        echo ">>> Step 1/2: COLMAP"
+        cmd_colmap
+        echo ""
     fi
 
-    # Rename images/ to input/
-    if [[ -d "$DATASET_PATH/images" ]]; then
-        if [[ -d "$colmap_input" ]]; then
-            rm -rf "$colmap_input"
-        fi
-        mv "$DATASET_PATH/images" "$colmap_input"
-    fi
-
-    # Flatten panorama output (images from subdirs to root)
-    flatten_images() {
-        local dir="$1"
-        if [[ ! -d "$dir" ]]; then return; fi
-        for subdir in "$dir"/*/; do
-            [[ -d "$subdir" ]] || continue
-            local prefix
-            prefix="$(basename "$subdir")"
-            for f in "$subdir"/*; do
-                [[ -f "$f" ]] || continue
-                local name
-                name="$(basename "$f")"
-                cp "$f" "${dir}/${prefix}_${name}"
-            done
-        done
-        find "$dir" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} + 2>/dev/null || true
-    }
-    flatten_images "$colmap_input" 2>/dev/null || true
-    flatten_images "$DATASET_PATH/masks" 2>/dev/null || true
-
-    # Remove images from excluded camera indices (0-3 typically have obstruction)
-    for i in 0 1 2 3; do
-        rm -f "$colmap_input/pano_camera${i}_"*.jpg 2>/dev/null || true
-        rm -f "$colmap_input/pano_camera${i}_"*.png 2>/dev/null || true
-    done
-
-    # Check panorama output exists
-    if [[ ! -d "$colmap_input" ]]; then
-        echo "ERROR: Panorama did not produce output at $colmap_input"
-        exit 1
-    fi
-
-    echo ""
-    echo ">>> Running COLMAP (starting in background)..."
-    echo "    Input:  $DATASET_PATH"
-    echo "    Output: $colmap_images"
-    echo "    Logs:   docker logs -f 3dgs-colmap-pipeline"
-    echo ""
-
-    # COLMAP (detached with log following)
-    docker rm -f 3dgs-colmap-pipeline 2>/dev/null || true
-
-    docker run -d \
-        --name "3dgs-colmap-pipeline" \
-        --user "$(get_host_user)" \
-        --gpus all \
-        --entrypoint "" \
-        -v "$DATASET_PATH:/dataset:rw" \
-        -v "$(pwd):/workspace:rw" \
-        -w /workspace \
-        -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-        --ipc=host \
-        --ulimit memlock=-1 --ulimit stack=67108864 \
-        "$image" \
-        bash convert.sh -s /dataset --resize --magick_executable ""
-
-    # Follow logs until completion
-    echo "Following COLMAP logs (Ctrl+C to detach, container continues)..."
-    docker logs -f 3dgs-colmap-pipeline 2>&1 &
-    logs_pid=$!
-    trap 'kill $logs_pid 2>/dev/null || true' INT
-    
-    docker wait 3dgs-colmap-pipeline >/dev/null 2>&1
-    exit_code=$?
-    kill $logs_pid 2>/dev/null || true
-    wait $logs_pid 2>/dev/null || true
-    docker rm -f 3dgs-colmap-pipeline >/dev/null 2>&1 || true
-    trap - INT
-
-    if [[ "$exit_code" != "0" ]]; then
-        echo "ERROR: COLMAP stage failed with exit code $exit_code"
-        exit 1
-    fi
-
-    # Check colmap output exists
-    if [[ ! -d "$colmap_images" ]]; then
-        echo "ERROR: COLMAP did not produce output at $colmap_images"
-        exit 1
-    fi
-
-    echo ""
-    echo ">>> Running 3DGS Training (starting in background)..."
-    echo "    Input:  $colmap_images"
-    echo "    Output: $train_output"
-    echo "    Logs:   docker logs -f 3dgs-workspace-train"
-    echo ""
-
-    # Training (detached with log following)
-    image=$(resolve_image "train")
-    docker rm -f 3dgs-workspace-train 2>/dev/null || true
-
-    docker run -d \
-        --name "3dgs-workspace-train" \
-        --user "$(get_host_user)" \
-        --gpus all \
-        -v "$DATASET_PATH:/dataset:rw" \
-        -v "$train_output:/output:rw" \
-        -w /dataset \
-        -m "${CONTAINER_MEM:-$DEFAULT_MEM}" \
-        --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
-        "$image" \
-        bash -c "python3 \$GS_PATH/train.py -s /dataset -m /output${RESOLUTION:+ -r $RESOLUTION}"
-
-    # Follow logs until completion
-    echo "Following Training logs (Ctrl+C to detach, container continues)..."
-    docker logs -f 3dgs-workspace-train 2>&1 &
-    logs_pid=$!
-    trap 'kill $logs_pid 2>/dev/null || true' INT
-    
-    docker wait 3dgs-workspace-train >/dev/null 2>&1
-    exit_code=$?
-    kill $logs_pid 2>/dev/null || true
-    wait $logs_pid 2>/dev/null || true
-    docker rm -f 3dgs-workspace-train >/dev/null 2>&1 || true
-    trap - INT
-
+    echo ">>> Step 2/2: Training"
+    cmd_train
     echo ""
     echo ">>> Pipeline complete!"
-    echo ">>> Output in: $train_output"
+    echo ">>> Output: $output"
 }
+
+# Argument parsing
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            colmap|train|panorama|inpaint|pipeline)
-                COMMAND="$1"
-                shift
-                ;;
+            panorama|colmap|train|inpaint|pipeline)
+                COMMAND="$1"; shift ;;
             --dataset)
-                DATASET_PATH="$2"
-                shift 2
-                ;;
+                [[ $# -ge 2 ]] || die "--dataset requires a value"
+                DATASET_PATH="$2"; shift 2 ;;
+            --mode)
+                [[ $# -ge 2 ]] || die "--mode requires a value (panorama|photos)"
+                MODE="$2"; shift 2 ;;
             --output)
-                OUTPUT_PATH="$2"
-                shift 2
-                ;;
+                [[ $# -ge 2 ]] || die "--output requires a value"
+                OUTPUT_PATH="$2"; shift 2 ;;
             --resolution)
-                RESOLUTION="$2"
-                shift 2
-                ;;
-            --image)
-                # Override image (advanced)
-                shift 2
-                ;;
-            --local)
-                USE_LOCAL="true"
-                shift
-                ;;
+                [[ $# -ge 2 ]] || die "--resolution requires a value"
+                RESOLUTION="$2"; shift 2 ;;
             --pull)
-                FORCE_PULL="true"
-                shift
-                ;;
-            --detach)
-                DETACHED="true"
-                shift
-                ;;
+                FORCE_PULL="true"; shift ;;
             --help|-h)
-                show_help
-                exit 0
-                ;;
+                usage; exit 0 ;;
             *)
-                echo "Unknown option: $1"
-                echo "Use ./run.sh --help for usage"
-                exit 1
-                ;;
+                die "Unknown option: $1" ;;
         esac
     done
 }
 
-main() {
-    # Check for help flag first
-    if [[ $# -eq 0 ]] || [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
-        show_help
-        exit 0
-    fi
+# Main
 
-    # Parse command
-    COMMAND="$1"
-    if [[ ! -v "IMAGES[$COMMAND]" ]]; then
-        echo "Unknown command: $COMMAND"
-        echo "Valid commands: colmap, train, inpaint, pipeline"
-        exit 1
-    fi
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
 
-    shift
+# First arg is command (unless it's a flag)
+case "$1" in
+    panorama|colmap|train|inpaint|pipeline|--help|-h)
+        if [[ "$1" == --help || "$1" == -h ]]; then
+            usage; exit 0
+        fi
+        COMMAND="$1"; shift
+        parse_args "$@"
+        ;;
+    *)
+        die "Unknown command: $1"
+        ;;
+esac
 
-    # Parse remaining args
-    parse_args "$@"
+# Check Docker
+command -v docker >/dev/null 2>&1 || die "docker is not installed"
+docker info >/dev/null 2>&1 || die "Cannot connect to Docker daemon"
 
-    # Check docker is available
-    if ! command -v docker >/dev/null 2>&1; then
-        echo "ERROR: docker is not installed"
-        exit 1
-    fi
-
-    # Check for NVIDIA GPU
-    if ! docker info >/dev/null 2>&1; then
-        echo "ERROR: Cannot connect to Docker daemon"
-        echo "Is Docker running?"
-        exit 1
-    fi
-
-    # Run the command
-    case "$COMMAND" in
-        colmap)
-            run_colmap
-            ;;
-        train)
-            run_train
-            ;;
-        panorama)
-            run_panorama
-            ;;
-        inpaint)
-            run_inpaint
-            ;;
-        pipeline)
-            run_pipeline
-            ;;
-    esac
-}
-
-main "$@"
+# Dispatch
+case "$COMMAND" in
+    panorama) cmd_panorama ;;
+    colmap)   cmd_colmap ;;
+    train)    cmd_train ;;
+    inpaint)  cmd_inpaint ;;
+    pipeline) cmd_pipeline ;;
+esac

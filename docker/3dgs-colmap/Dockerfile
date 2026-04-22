@@ -134,6 +134,10 @@ COPY --from=builder /colmap-src/python /colmap/python
 COPY convert.sh /usr/local/bin/convert.sh
 RUN chmod +x /usr/local/bin/convert.sh
 
+# Copy our COLMAP sparse cleanup script.
+COPY clean_colmap_sparse.py /usr/local/bin/clean_colmap_sparse.py
+RUN chmod +x /usr/local/bin/clean_colmap_sparse.py
+
 # Create a non-root user matching the host user's UID/GID.
 # UID/GID are set at runtime via --userns=keep-id or docker run --user.
 ARG USERNAME=colmap

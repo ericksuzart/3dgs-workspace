@@ -1,8 +1,8 @@
-# Devcontainer workspace for 3D Gaussian Splatting
+# 3DGS Workspace
 
 [![Open in Dev Containers](https://img.shields.io/static/v1?label=Dev%20Containers&message=Open&color=blue&logo=visualstudiocode)](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/ericksuzart/3dgs-workspace)
 
-This workspace provides a dockerized environment for running the [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) project. It simplifies the setup process by encapsulating all dependencies and configs within Docker & devcontainer.
+This workspace provides a Dockerized environment for running the [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) project. It simplifies the setup process by encapsulating all dependencies and configuration within Docker.
 
 ## Prerequisites
 
@@ -20,9 +20,53 @@ Before you begin, ensure you have the following installed on your system:
 
 ## Quick Start
 
-### Option 1: Devcontainer (Recommended)
+### Option 1: Unified CLI (Recommended)
+
+The `run.sh` script provides a single entry point for all operations.
 
 1. **Clone and setup:**
+
+   ```bash
+   git clone https://github.com/ericksuzart/3dgs-workspace.git
+   cd 3dgs-workspace
+   ```
+
+2. **Run a command:**
+
+   ```bash
+   # Process 360° panorama images
+   ./run.sh panorama --dataset /path/to/scene
+
+   # Run COLMAP on regular photos
+   ./run.sh colmap --dataset /path/to/scene
+
+   # Train a 3DGS model
+   ./run.sh train --dataset /path/to/scene
+
+   # Full pipeline: panorama → train
+   ./run.sh pipeline --dataset /path/to/scene --mode panorama
+
+   # Full pipeline: photos → colmap → train
+   ./run.sh pipeline --dataset /path/to/scene --mode photos
+
+   # Interactive inpainting (remove tripods, unwanted objects)
+   ./run.sh inpaint --dataset /path/to/360
+
+   # Help
+   ./run.sh --help
+   ```
+
+   > **Note**: Replace `/path/to/scene` with the actual path on your machine where your datasets are stored.
+
+3. **Run in background (optional):**
+
+   ```bash
+   screen -dmS 3dgs ./run.sh pipeline --dataset /path/to/scene --mode panorama
+   ```
+
+### Option 2: Devcontainer
+
+1. **Clone and set dataset path:**
 
    ```bash
    git clone https://github.com/ericksuzart/3dgs-workspace.git
@@ -31,7 +75,7 @@ Before you begin, ensure you have the following installed on your system:
    code .
    ```
 
-   > **Note**: Replace `/path/to/your/datasets` with the actual path on your machine where your datasets are stored. This path will be mounted inside the Docker container as `/datasets` by default.
+   > **Note**: Replace `/path/to/your/datasets` with the actual path on your machine where your datasets are stored. This path will be mounted inside the Docker container as `/dataset`.
 
 2. **Click "Reopen in Container" when prompted**
 
@@ -47,23 +91,8 @@ Before you begin, ensure you have the following installed on your system:
 4. **Run Training:**
 
    ```bash
-   python3 $GS_PATH/train.py -s $DATASET_PATH/<your-dataset>
+   python3 $GS_PATH/train.py -s /dataset
    ```
-
-### Option 2: Docker Compose
-
-```bash
-export DATASET_PATH=/path/to/your/datasets
-
-# Preprocess with COLMAP
-docker compose --profile colmap run --rm colmap -s /dataset --resize
-
-# Training (interactive shell)
-docker compose --profile training run --rm training
-
-# Or run training directly
-docker compose --profile training run --rm training python3 $GS_PATH/train.py -s /dataset
-```
 
 ### Option 3: Docker Hub Images
 
@@ -78,7 +107,7 @@ docker run --rm \
   -e DATASET_PATH=/dataset \
   --entrypoint python3 \
   ericksuzart/3dgs-colmap:latest \
-  /colmap/python/examples/panorama_sfm.py --input_image_path /dataset/panorama --output_path /dataset/output
+  /colmap/python/examples/panorama_sfm.py --input_image_path /dataset/panorama --output_path /dataset
 ```
 
 **3DGS Training:**
@@ -94,72 +123,46 @@ docker run --rm -it \
 
 > **Note**: The `--user "$(id -u):$(id -g)"` flag ensures output files have correct ownership on your host system.
 
-### Option 4: Standalone Docker
-
-See the [Makefile](Makefile) for common targets, or use the scripts in `docker/*/run-container.sh`.
-
 ## Complete Pipeline
 
 A typical 3DGS workflow involves these steps:
 
-### Step 1: COLMAP Preprocessing
+### Step 1: Process Images
 
-Convert raw images into camera poses and a sparse point cloud using COLMAP.
+Choose one approach based on your image source:
 
-**Input structure:**
+**360° Panorama Images:**
+
 ```
 <dataset>/
-└── input/              ← Place your raw images here (.jpg, .png)
+└── panorama/             ← Place your equirectangular images here (.jpg, .png)
 ```
 
-**Run COLMAP:**
 ```bash
-# Using docker compose
-docker compose --profile colmap run --rm colmap -s /dataset --resize
-
-# Or using the script directly
-DATASET_PATH=/path/to/dataset docker/3dgs-colmap/run-container.sh
-
-# Or with docker run directly
-docker run --rm --gpus all --user "$(id -u):$(id -g)" -v "$DATASET_PATH":/dataset \
-  ericksuzart/3dgs-colmap:latest \
-  -c "convert.sh -s /dataset --resize"
+./run.sh panorama --dataset /path/to/scene
 ```
 
-**Output structure:**
+Output: `images/` + `sparse/` — ready for training.
+
+**Regular Photos:**
+
 ```
 <dataset>/
-├── images/             ← Undistorted images (use these for training)
-├── sparse/0/           ← COLMAP sparse reconstruction
-│   ├── cameras.bin
-│   ├── images.bin
-│   └── points3D.bin
-├── images_2/           ← 50% resized images (if --resize used)
-├── images_4/           ← 25% resized images (if --resize used)
-└── images_8/           ← 12.5% resized images (if --resize used)
+└── input/                ← Place your raw images here (.jpg, .png)
 ```
 
-**COLMAP options:**
-| Flag                         | Description                            | Default       |
-| ---------------------------- | -------------------------------------- | ------------- |
-| `-s, --source_path`          | Path to dataset (required)             | —             |
-| `--resize`                   | Create multi-resolution image pyramids | Off           |
-| `--no_gpu`                   | Disable GPU for SIFT                   | GPU enabled   |
-| `--skip_matching`            | Skip feature extraction/matching       | Off           |
-| `--camera <model>`           | Camera model                           | `OPENCV`      |
-| `--colmap_executable <path>` | Custom COLMAP path                     | `colmap`      |
-| `--magick_executable <path>` | ImageMagick path (for resize)          | `magick` (v7) |
+```bash
+./run.sh colmap --dataset /path/to/scene
+```
+
+Output: `images/` + `sparse/0/` — ready for training.
 
 ### Step 2: (Optional) Interactive Inpainting
 
 Remove tripods, people, or unwanted objects from 360° equirectangular images.
 
 ```bash
-# Using docker compose
-docker compose --profile inpaint run --rm inpaint
-
-# Or using the script
-DATASET_PATH=/path/to/images ./docker/pre-processing/run_inpainting.sh
+./run.sh inpaint --dataset /path/to/360
 ```
 
 **Workflow:**
@@ -176,17 +179,14 @@ DATASET_PATH=/path/to/images ./docker/pre-processing/run_inpainting.sh
 ### Step 3: Training
 
 ```bash
-# Using docker compose
-docker compose --profile training run --rm training python3 $GS_PATH/train.py -s /dataset
+# Using the unified CLI
+./run.sh train --dataset /path/to/scene
 
-# Or with docker run
-docker run --rm -it --gpus all --user "$(id -u):$(id -g)" \
-  -v "$DATASET_PATH":/dataset -v ./output:/output \
-  ericksuzart/3dgsworkspace:latest \
-  python3 /opt/gaussian-splatting/train.py -s /dataset
+# With half resolution
+./run.sh train --dataset /path/to/scene --resolution 2
 
 # Or inside the devcontainer
-python3 $GS_PATH/train.py -s $DATASET_PATH/<your-dataset>
+python3 $GS_PATH/train.py -s /dataset
 ```
 
 **Output:**
@@ -202,32 +202,37 @@ output/
     └── ... (training logs, checkpoints)
 ```
 
-## Makefile Targets
+## run.sh Reference
 
-```bash
-make build-all        # Build all Docker images
-make build-train      # Build training image
-make build-colmap     # Build COLMAP image
-make build-inpaint    # Build inpainting image
+| Command    | Description                               | Required Inputs                       |
+| ---------- | ----------------------------------------- | ------------------------------------- |
+| `panorama` | Process 360° equirectangular images       | `--dataset` + `panorama/`             |
+| `colmap`   | Run COLMAP SfM on regular photos          | `--dataset` + `input/`                |
+| `train`    | Run 3D Gaussian Splatting training        | `--dataset` + `images/` + `sparse/0/` |
+| `inpaint`  | Interactive 360° image cleanup            | `--dataset`                           |
+| `pipeline` | Full pipeline: (panorama\|photos) → train | `--dataset` + `--mode`                |
 
-make colmap           # Run COLMAP preprocessing
-make train            # Start training shell
-make inpaint          # Run interactive inpainting
+**Options:**
 
-make lint             # Run shellcheck + ruff
-make clean            # Remove build artifacts
-```
+| Flag             | Description                                     | Default          |
+| ---------------- | ----------------------------------------------- | ---------------- |
+| `--dataset PATH` | Dataset path (required)                         | —                |
+| `--mode MODE`    | Pipeline mode: `panorama` \| `photos`           | —                |
+| `--output PATH`  | Training output directory                       | `dataset/output` |
+| `--resolution N` | Training resolution (1=full, 2=half, 4=quarter) | `4`              |
+| `--pull`         | Force pull latest images from Docker Hub        | Off              |
+| `--help`         | Show help                                       | —                |
 
 ## Environment Variables
 
-| Variable          | Description                      | Default    |
-| ----------------- | -------------------------------- | ---------- |
-| `DATASET_PATH`    | Host path to dataset             | —          |
-| `OUTPUT_PATH`     | Host path for training output    | `./output` |
-| `CONTAINER_MEM`   | Memory limit for containers      | `12g`      |
-| `DISPLAY_SCALE`   | Inpainting window scale          | `0.5`      |
-| `DILATION_ITER`   | Mask dilation iterations         | `10`       |
-| `INPAINT_BACKEND` | Inpainting engine (`sd2`/`lama`) | `sd2`      |
+| Variable          | Description                      | Default                |
+| ----------------- | -------------------------------- | ---------------------- |
+| `DATASET_PATH`    | Host path to dataset             | (required)             |
+| `OUTPUT_PATH`     | Host path for training output    | `$DATASET_PATH/output` |
+| `CONTAINER_MEM`   | Memory limit for containers      | `15g`                  |
+| `DISPLAY_SCALE`   | Inpainting window scale          | `0.5`                  |
+| `DILATION_ITER`   | Mask dilation iterations         | `10`                   |
+| `INPAINT_BACKEND` | Inpainting engine (`sd2`/`lama`) | `sd2`                  |
 
 ## Contributing
 

@@ -124,7 +124,8 @@ if [ "$SKIP_MATCHING" -eq 0 ]; then
         --database_path "\"$SOURCE_PATH/distorted/database.db\"" \
         --image_path "\"$SOURCE_PATH/input\"" \
         --ImageReader.single_camera 1 \
-        --ImageReader.camera_model "$CAMERA"
+        --ImageReader.camera_model "$CAMERA" \
+        --SiftExtraction.max_num_features 65536
     check_exit_code "Feature extraction" $?
 
     #Feature matching
