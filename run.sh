@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# =============================================================================
-# 3DGS Workspace - Unified CLI
-# =============================================================================
-#
+
 # A single entry point for Gaussian Splatting scene reconstruction.
 # Supports both 360° panorama and regular photo workflows.
 #
@@ -12,11 +9,11 @@ set -euo pipefail
 #   ./run.sh <command> [options]
 #
 # Commands:
-#   panorama   Process 360° equirectangular images (panorama/ → images/)
-#   colmap     Run COLMAP SfM on regular photos (input/ → images/ + sparse/0/)
-#   train      Run 3D Gaussian Splatting training (images/ → output/)
+#   panorama   Process 360° equirectangular images (panorama/ -> images/)
+#   colmap     Run COLMAP SfM on regular photos (input/ -> images/ + sparse/0/)
+#   train      Run 3D Gaussian Splatting training (images/ -> output/)
 #   inpaint    Interactive 360° image cleanup
-#   pipeline   Full pipeline: (panorama|photos) → train
+#   pipeline   Full pipeline: (panorama|photos) -> train
 #
 # Options:
 #   --dataset PATH   Dataset path (required)
@@ -27,9 +24,9 @@ set -euo pipefail
 #   --help           Show this help
 #
 # Dataset structure:
-#   Panorama:  dataset/panorama/*.jpg  →  run panorama  →  dataset/images/
-#   Photos:    dataset/input/*.jpg     →  run colmap    →  dataset/images/ + sparse/0/
-#   Training:  dataset/images/ + sparse/0/  →  run train  →  dataset/output/
+#   Panorama:  dataset/panorama/*.jpg  ->  run panorama  ->  dataset/images/
+#   Photos:    dataset/input/*.jpg     ->  run colmap    ->  dataset/images/ + sparse/0/
+#   Training:  dataset/images/ + sparse/0/  ->  run train  ->  dataset/output/
 #
 # Docker images (local-first, pulled from Hub if missing):
 #   3dgs-colmap      - COLMAP + Panorama SfM
@@ -59,11 +56,11 @@ Usage:
   ./run.sh <command> [options]
 
 Commands:
-  panorama   Process 360° equirectangular images (panorama/ → images/)
-  colmap     Run COLMAP SfM on regular photos (input/ → images/ + sparse/0/)
-  train      Run 3D Gaussian Splatting training (images/ → output/)
+  panorama   Process 360° equirectangular images (panorama/ -> images/)
+  colmap     Run COLMAP SfM on regular photos (input/ -> images/ + sparse/0/)
+  train      Run 3D Gaussian Splatting training (images/ -> output/)
   inpaint    Interactive 360° image cleanup
-  pipeline   Full pipeline: (panorama|photos) → train
+  pipeline   Full pipeline: (panorama|photos) -> train
 
 Options:
   --dataset PATH   Dataset path (required)
@@ -74,9 +71,9 @@ Options:
   --help           Show this help
 
 Dataset structure:
-  Panorama:  dataset/panorama/*.jpg  →  run panorama  →  dataset/images/
-  Photos:    dataset/input/*.jpg     →  run colmap    →  dataset/images/ + sparse/0/
-  Training:  dataset/images/ + sparse/0/  →  run train  →  dataset/output/
+  Panorama:  dataset/panorama/*.jpg  ->  run panorama  ->  dataset/images/
+  Photos:    dataset/input/*.jpg     ->  run colmap    ->  dataset/images/ + sparse/0/
+  Training:  dataset/images/ + sparse/0/  ->  run train  ->  dataset/output/
 
 Examples:
   ./run.sh panorama --dataset /data/scene
@@ -189,14 +186,108 @@ cmd_panorama() {
         die "Panorama SfM failed to create a sparse model. Try with more panorama images (at least 3 with good overlap)."
     fi
 
+    # Resize images using the same format as the normal colmap workflow
+    cmd_resize "$image"
+
     local count
     count=$(find "$DATASET_PATH/images" -maxdepth 1 -type d 2>/dev/null | wc -l)
     echo ""
     echo "=========================================="
     echo "  Panorama complete"
-    echo "  Cameras: $((count - 1)) → $DATASET_PATH/images/"
+    echo "  Cameras: $((count - 1)) -> $DATASET_PATH/images/"
     echo "  Sparse:  $DATASET_PATH/sparse/"
     echo "=========================================="
+}
+
+cmd_resize() {
+    local image="$1"
+
+    echo ""
+    echo "Resizing images (50%, 25%, 12.5%)..."
+    echo "  Running inside Docker container..."
+
+    shellcheck disable=SC2016
+    run_container \
+        --entrypoint "" \
+        -v "$DATASET_PATH:/dataset:rw" \
+        -w /dataset \
+        "$image" \
+        bash -c '
+        set -euo pipefail
+
+        IMAGES_DIR="/dataset/images"
+        TOTAL_FILES=$(find "$IMAGES_DIR" -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.jpeg" \) | wc -l)
+        job_pids=()
+
+        if [[ $TOTAL_FILES -eq 0 ]]; then
+            echo "  No images found to resize."
+            exit 0
+        fi
+
+        echo "  Found $TOTAL_FILES images to resize."
+
+        MAX_JOBS=$(nproc 2>/dev/null || echo 4)
+        PROCESSED_COUNT=0
+
+        # Process each camera subdirectory
+        for camera_dir in "$IMAGES_DIR"/pano_camera*/; do
+            if [[ ! -d "$camera_dir" ]]; then
+                continue
+            fi
+
+            camera_name=$(basename "$camera_dir")
+            echo "  Processing $camera_name..."
+
+            # Create corresponding directories
+            mkdir -p "/dataset/images_2/$camera_name"
+            mkdir -p "/dataset/images_4/$camera_name"
+            mkdir -p "/dataset/images_8/$camera_name"
+
+            # Process images in this camera directory
+            while IFS= read -r -d "" source_file; do
+                file=$(basename "$source_file")
+
+                # Process in background
+                (
+                    # 50% resize (images_2)
+                    cp "$source_file" "/dataset/images_2/$camera_name/$file"
+                    mogrify -resize 50% "/dataset/images_2/$camera_name/$file"
+
+                    # 25% resize (images_4)
+                    cp "$source_file" "/dataset/images_4/$camera_name/$file"
+                    mogrify -resize 25% "/dataset/images_4/$camera_name/$file"
+
+                    # 12.5% resize (images_8)
+                    cp "$source_file" "/dataset/images_8/$camera_name/$file"
+                    mogrify -resize 12.5% "/dataset/images_8/$camera_name/$file"
+                ) &
+                job_pids+=($!)
+
+                # Limit parallel jobs
+                if ((${#job_pids[@]} >= MAX_JOBS)); then
+                    wait "${job_pids[0]}"
+                    job_pids=("${job_pids[@]:1}")
+                fi
+
+                # Update progress
+                PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+                percentage=$(( (PROCESSED_COUNT * 100) / TOTAL_FILES ))
+                bar_length=40
+                filled_length=$(( (PROCESSED_COUNT * bar_length) / TOTAL_FILES ))
+                bar=$(printf "%0.s#" $(seq 1 $filled_length))
+                empty=$(printf "%0.s-" $(seq 1 $((bar_length - filled_length))))
+                printf "    Progress: [%s%s] %d%% (%d/%d) \r" "$bar" "$empty" "$percentage" "$PROCESSED_COUNT" "$TOTAL_FILES"
+            done < <(find "$camera_dir" -maxdepth 1 -type f -print0)
+        done
+
+        # Wait for remaining jobs
+        for pid in "${job_pids[@]}"; do
+            wait "$pid"
+        done
+
+        printf "\n"
+        echo "  Image resizing complete."
+        '
 }
 
 cmd_colmap() {
