@@ -130,6 +130,7 @@ if [ "$SKIP_MATCHING" -eq 0 ]; then
 
     #Feature matching
     eval $COLMAP_CMD exhaustive_matcher \
+        --SiftMatching.max_num_features 65536 \
         --database_path "\"$SOURCE_PATH/distorted/database.db\""
     check_exit_code "Feature matching" $?
 

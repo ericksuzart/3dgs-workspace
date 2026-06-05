@@ -9,6 +9,7 @@ set -euo pipefail
 #   ./run.sh <command> [options]
 #
 # Commands:
+#   keyframes  Extract keyframes from a video file
 #   panorama   Process 360° equirectangular images (panorama/ -> images/)
 #   colmap     Run COLMAP SfM on regular photos (input/ -> images/ + sparse/0/)
 #   train      Run 3D Gaussian Splatting training (images/ -> output/)
@@ -16,14 +17,19 @@ set -euo pipefail
 #   pipeline   Full pipeline: (panorama|photos) -> train
 #
 # Options:
-#   --dataset PATH   Dataset path (required)
-#   --mode MODE      Pipeline mode: panorama | photos (required for pipeline)
-#   --output PATH    Training output directory (default: dataset/output)
-#   --resolution N   Training resolution (1=full, 2=half, default: 1)
-#   --pull           Force pull latest images from Docker Hub
-#   --help           Show this help
+#   --dataset PATH        Dataset path (required)
+#   --video PATH          Video file for keyframe extraction (required for keyframes)
+#   --360                 Mark video as 360° (saves to panorama/, otherwise input/)
+#   --mode MODE           Pipeline mode: panorama | photos (required for pipeline)
+#   --output PATH         Training output directory (default: dataset/output)
+#   --resolution N        Training resolution (1=full, 2=half, default: 1)
+#   --yaw-steps N         Virtual cameras per pitch level (default: 8, reduces GPU mem)
+#   --remove-bottom N     Remove first N cameras (for tripod/rig, default: =yaw-steps, 0=none)
+#   --pull                Force pull latest images from Docker Hub
+#   --help                Show this help
 #
 # Dataset structure:
+#   Video:     video.mp4               ->  run keyframes ->  dataset/{panorama|input}/*.jpg
 #   Panorama:  dataset/panorama/*.jpg  ->  run panorama  ->  dataset/images/
 #   Photos:    dataset/input/*.jpg     ->  run colmap    ->  dataset/images/ + sparse/0/
 #   Training:  dataset/images/ + sparse/0/  ->  run train  ->  dataset/output/
@@ -35,15 +41,19 @@ set -euo pipefail
 # =============================================================================
 
 DOCKER_HUB_ORG="ericksuzart"
-DEFAULT_MEM="15g"
+DEFAULT_MEM="120g"
 
 # Defaults
 COMMAND=""
 DATASET_PATH=""
 OUTPUT_PATH=""
-RESOLUTION="4"
+RESOLUTION="1"
 MODE=""
+YAW_STEPS=""
+BOTTOM_REMOVE=""
 FORCE_PULL="false"
+VIDEO_PATH=""
+IS_360="false"
 
 # Helpers
 
@@ -56,6 +66,7 @@ Usage:
   ./run.sh <command> [options]
 
 Commands:
+  keyframes  Extract keyframes from a video file
   panorama   Process 360° equirectangular images (panorama/ -> images/)
   colmap     Run COLMAP SfM on regular photos (input/ -> images/ + sparse/0/)
   train      Run 3D Gaussian Splatting training (images/ -> output/)
@@ -63,19 +74,26 @@ Commands:
   pipeline   Full pipeline: (panorama|photos) -> train
 
 Options:
-  --dataset PATH   Dataset path (required)
-  --mode MODE      Pipeline mode: panorama | photos (required for pipeline)
-  --output PATH    Training output directory (default: dataset/output)
-  --resolution N   Training resolution (1=full, 2=half, default: 1)
-  --pull           Force pull latest images from Docker Hub
-  --help           Show this help
+  --dataset PATH        Dataset path (required)
+  --video PATH          Video file for keyframe extraction (required for keyframes)
+  --360                 Mark video as 360° (saves to panorama/, otherwise input/)
+  --mode MODE           Pipeline mode: panorama | photos (required for pipeline)
+  --output PATH         Training output directory (default: dataset/output)
+  --resolution N        Training resolution (1=full, 2=half, default: 1)
+  --yaw-steps N         Virtual cameras per pitch level (default: 8, reduces GPU mem)
+  --remove-bottom N     Remove first N cameras (for tripod/rig, default: =yaw-steps, 0=none)
+  --pull                Force pull latest images from Docker Hub
+  --help                Show this help
 
 Dataset structure:
+  Video:     video.mp4               ->  run keyframes ->  dataset/{panorama|input}/*.jpg
   Panorama:  dataset/panorama/*.jpg  ->  run panorama  ->  dataset/images/
   Photos:    dataset/input/*.jpg     ->  run colmap    ->  dataset/images/ + sparse/0/
   Training:  dataset/images/ + sparse/0/  ->  run train  ->  dataset/output/
 
 Examples:
+  ./run.sh keyframes --dataset /data/scene --video /path/to/video.mp4
+  ./run.sh keyframes --dataset /data/scene --video /path/to/360.mp4 --360
   ./run.sh panorama --dataset /data/scene
   ./run.sh colmap   --dataset /data/scene
   ./run.sh train    --dataset /data/scene
@@ -111,7 +129,7 @@ resolve_image() {
     local hub_img="${DOCKER_HUB_ORG}/${name}"
 
     if [[ "$FORCE_PULL" == "true" ]]; then
-        docker pull "$hub_img"
+        docker pull "$hub_img" >&2
         echo "$hub_img"
         return
     fi
@@ -123,8 +141,8 @@ resolve_image() {
     fi
 
     # Try pulling from Hub
-    echo "Pulling ${hub_img} from Docker Hub..."
-    docker pull "$hub_img"
+    echo "Pulling ${hub_img} from Docker Hub..." >&2
+    docker pull "$hub_img" >&2
     echo "$hub_img"
 }
 
@@ -141,6 +159,45 @@ run_container() {
 
 # Commands
 
+cmd_keyframes() {
+    ensure_dataset
+    [[ -n "$VIDEO_PATH" ]] || die "--video is required for keyframes"
+    [[ -f "$VIDEO_PATH" ]] || die "Video file does not exist: $VIDEO_PATH"
+    command -v ffmpeg >/dev/null 2>&1 || die "ffmpeg is not installed"
+
+    # Determine output directory based on --360 flag
+    local out_dir
+    if [[ "$IS_360" == "true" ]]; then
+        out_dir="$DATASET_PATH/panorama"
+    else
+        out_dir="$DATASET_PATH/input"
+    fi
+    mkdir -p "$out_dir"
+
+    # Resolve absolute path for video file
+    VIDEO_PATH="$(cd "$(dirname "$VIDEO_PATH")" && pwd)/$(basename "$VIDEO_PATH")"
+
+    echo "=========================================="
+    echo "  Keyframe Extraction"
+    echo "=========================================="
+    echo "  Video:   $VIDEO_PATH"
+    echo "  Output:  $out_dir/"
+    echo "  360°:    $IS_360"
+    echo "=========================================="
+    echo ""
+
+    ffmpeg -skip_frame nokey -i "$VIDEO_PATH" -vsync vfr "$out_dir/panorama%04d.jpg"
+
+    local count
+    count=$(find "$out_dir" -maxdepth 1 -name "panorama*.jpg" -type f 2>/dev/null | wc -l)
+    echo ""
+    echo "=========================================="
+    echo "  Keyframe extraction complete"
+    echo "  Extracted: $count frames"
+    echo "  Output:    $out_dir/"
+    echo "=========================================="
+}
+
 cmd_panorama() {
     ensure_dataset
     [[ -d "$DATASET_PATH/panorama" ]] || die "No panorama/ directory found in $DATASET_PATH"
@@ -149,55 +206,72 @@ cmd_panorama() {
     image=$(resolve_image "3dgs-colmap")
 
     echo "=========================================="
-    echo "  Panorama SfM"
+    echo "  Panorama SfM (intra-rig matching)"
     echo "=========================================="
     echo "  Dataset: $DATASET_PATH"
     echo "  Image:   $image"
     echo "=========================================="
     echo ""
 
+    # Build panorama_sfm.py args
+    pano_args=(
+        --input_image_path /dataset/panorama
+        --output_path /dataset
+        --matcher vocabtree
+        --pano_render_type overlapping
+    )
+    if [[ -n "$YAW_STEPS" ]]; then
+        pano_args+=(--num_steps_yaw "$YAW_STEPS")
+    fi
+
     run_container \
         --entrypoint "" \
         -v "$DATASET_PATH:/dataset:rw" \
         -w /dataset \
         "$image" \
-        bash -c "python3 /colmap/python/examples/panorama_sfm.py \
-            --input_image_path /dataset/panorama \
-            --output_path /dataset \
-            --matcher exhaustive \
-            --pano_render_type overlapping"
+        /usr/local/bin/panorama_sfm.py "${pano_args[@]}"
 
-    # Remove obstruction cameras (0-3) from images and COLMAP sparse files
-    for i in 0 1 2 3; do
+    # Determine how many cameras to remove (default: yaw steps, i.e. one whole pitch level)
+    # With N yaw steps × 3 pitches, the first N cameras (pitch=-35°) capture the tripod/rig.
+    local bottom_remove="${BOTTOM_REMOVE:-${YAW_STEPS:-8}}"
+    # Clean both possible naming conventions (pano_camera and _camera).
+    remove_cams=()
+    for ((i=0; i<bottom_remove; i++)); do
+        remove_cams+=("pano_camera$i")
         rm -rf "$DATASET_PATH/images/pano_camera${i}" 2>/dev/null || true
+        rm -rf "$DATASET_PATH/images/_camera${i}" 2>/dev/null || true
     done
 
-    # Clean COLMAP sparse/0/ to remove references to deleted images
-    docker run --rm \
-        --user "$(host_user)" \
-        --entrypoint /usr/bin/python3 \
-        -v "$DATASET_PATH:/dataset:rw" \
-        -w /dataset \
-        "$image" \
-        /usr/local/bin/clean_colmap_sparse.py /dataset "_camera0,_camera1,_camera2,_camera3" || true
+    # Clean the COLMAP sparse model to remove references to the deleted cameras
+    if (( bottom_remove > 0 )); then
+        IFS=,; clean_prefixes="${remove_cams[*]}"; unset IFS
+        docker run --rm \
+            --user "$(host_user)" \
+            --entrypoint /usr/bin/python3 \
+            -v "$DATASET_PATH:/dataset:rw" \
+            -w /dataset \
+            "$image" \
+            /usr/local/bin/clean_colmap_sparse.py /dataset "$clean_prefixes"
+    fi
 
     # Verify sparse reconstruction succeeded
     if [[ ! -f "$DATASET_PATH/sparse/0/images.bin" ]] && [[ ! -f "$DATASET_PATH/sparse/0/images.txt" ]]; then
         die "Panorama SfM failed to create a sparse model. Try with more panorama images (at least 3 with good overlap)."
     fi
 
-    # Resize images using the same format as the normal colmap workflow
+    # Resize images (same as before)
     cmd_resize "$image"
 
     local count
     count=$(find "$DATASET_PATH/images" -maxdepth 1 -type d 2>/dev/null | wc -l)
     echo ""
     echo "=========================================="
-    echo "  Panorama complete"
+    echo "  Panorama complete (intra-rig enabled)"
     echo "  Cameras: $((count - 1)) -> $DATASET_PATH/images/"
     echo "  Sparse:  $DATASET_PATH/sparse/"
     echo "=========================================="
 }
+
 
 cmd_resize() {
     local image="$1"
@@ -206,7 +280,7 @@ cmd_resize() {
     echo "Resizing images (50%, 25%, 12.5%)..."
     echo "  Running inside Docker container..."
 
-    shellcheck disable=SC2016
+    # shellcheck disable=SC2016
     run_container \
         --entrypoint "" \
         -v "$DATASET_PATH:/dataset:rw" \
@@ -438,6 +512,11 @@ parse_args() {
             --dataset)
                 [[ $# -ge 2 ]] || die "--dataset requires a value"
                 DATASET_PATH="$2"; shift 2 ;;
+            --video)
+                [[ $# -ge 2 ]] || die "--video requires a value"
+                VIDEO_PATH="$2"; shift 2 ;;
+            --360)
+                IS_360="true"; shift ;;
             --mode)
                 [[ $# -ge 2 ]] || die "--mode requires a value (panorama|photos)"
                 MODE="$2"; shift 2 ;;
@@ -447,6 +526,12 @@ parse_args() {
             --resolution)
                 [[ $# -ge 2 ]] || die "--resolution requires a value"
                 RESOLUTION="$2"; shift 2 ;;
+            --yaw-steps)
+                [[ $# -ge 2 ]] || die "--yaw-steps requires a value"
+                YAW_STEPS="$2"; shift 2 ;;
+            --remove-bottom)
+                [[ $# -ge 2 ]] || die "--remove-bottom requires a value"
+                BOTTOM_REMOVE="$2"; shift 2 ;;
             --pull)
                 FORCE_PULL="true"; shift ;;
             --help|-h)
@@ -466,7 +551,7 @@ fi
 
 # First arg is command (unless it's a flag)
 case "$1" in
-    panorama|colmap|train|inpaint|pipeline|--help|-h)
+    keyframes|panorama|colmap|train|inpaint|pipeline|--help|-h)
         if [[ "$1" == --help || "$1" == -h ]]; then
             usage; exit 0
         fi
@@ -484,6 +569,7 @@ docker info >/dev/null 2>&1 || die "Cannot connect to Docker daemon"
 
 # Dispatch
 case "$COMMAND" in
+    keyframes) cmd_keyframes ;;
     panorama) cmd_panorama ;;
     colmap)   cmd_colmap ;;
     train)    cmd_train ;;

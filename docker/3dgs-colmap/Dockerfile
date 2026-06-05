@@ -7,7 +7,7 @@ ARG NVIDIA_CUDA_VERSION=12.6.0
 #
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 
-ARG COLMAP_GIT_COMMIT=main
+ARG COLMAP_GIT_COMMIT=4.0.4
 ARG CUDA_ARCHITECTURES=all-major
 ENV QT_XCB_GL_INTEGRATION=xcb_egl
 
@@ -35,6 +35,7 @@ RUN apt-get update && \
         qt6-base-dev \
         libqt6opengl6-dev \
         libqt6openglwidgets6 \
+        qt6-svg-dev \
         libcgal-dev \
         libceres-dev \
         libcurl4-openssl-dev \
@@ -134,27 +135,13 @@ COPY --from=builder /colmap-src/python /colmap/python
 COPY convert.sh /usr/local/bin/convert.sh
 RUN chmod +x /usr/local/bin/convert.sh
 
-# Copy our COLMAP sparse cleanup script.
+# Copy our custom scripts.
 COPY clean_colmap_sparse.py /usr/local/bin/clean_colmap_sparse.py
 RUN chmod +x /usr/local/bin/clean_colmap_sparse.py
+COPY panorama_sfm.py /usr/local/bin/panorama_sfm.py
+RUN chmod +x /usr/local/bin/panorama_sfm.py
 
-# Create a non-root user matching the host user's UID/GID.
-# UID/GID are set at runtime via --userns=keep-id or docker run --user.
-ARG USERNAME=colmap
-ARG USER_UID=1000
-ARG USER_GID=1000
-
-RUN groupadd --gid $USER_GID $USERNAME 2>/dev/null || true && \
-    useradd --uid $USER_UID --gid $USER_GID -m -s /bin/bash $USERNAME 2>/dev/null || true && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends sudo && \
-    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
-    chmod 0440 /etc/sudoers.d/$USERNAME && \
-    usermod --append --groups video $USERNAME 2>/dev/null || true && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-USER $USERNAME
-WORKDIR /home/$USERNAME
+# User management is handled at runtime via docker run --user in run.sh
+WORKDIR /workspace
 
 ENTRYPOINT [ "bash" ]
